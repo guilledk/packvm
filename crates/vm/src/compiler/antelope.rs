@@ -88,7 +88,6 @@ impl TryFrom<ABI> for AntelopeSourceCode {
         for struct_def in structs.iter_mut() {
             expand_struct_base(&abi, struct_def)?;
         }
-        println!("{:#?}\n{:#?}\n{:#?}", aliases, enums, structs);
         Ok(AntelopeSourceCode {
             aliases,
             enums,

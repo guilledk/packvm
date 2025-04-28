@@ -119,7 +119,7 @@ fn compile_optional<
     let mut opt_stack = Vec::new();
     compile_type(src, &type_name, &mut opt_stack)?;
 
-    code.push(Instruction::Optional(opt_stack.len() as u8));
+    code.push(Instruction::Optional{stride: opt_stack.len() as u8});
     compile_type(src, &type_name, code)?;
     Ok(())
 }
@@ -138,7 +138,7 @@ fn compile_extension<
     let mut ext_stack = Vec::new();
     compile_type(src, &type_name, &mut ext_stack)?;
 
-    code.push(Instruction::Extension(ext_stack.len() as u8));
+    code.push(Instruction::Extension{stride: ext_stack.len() as u8});
     compile_type(src, &type_name, code)?;
     Ok(())
 }
@@ -161,7 +161,11 @@ fn compile_array<
     // first instruction of array loop
     let array_ptr = code.len();
     compile_type(src, &type_name, code)?;
-    code.push(Instruction::JmpNotCND(array_ptr, 0, -1));
+    code.push(Instruction::JmpNotCND{
+        target: array_ptr,
+        value: 0,
+        delta: -1
+    });
     code.push(Instruction::PopCND);
     Ok(())
 }
@@ -215,18 +219,22 @@ fn compile_enum<
 
     // variant index based jump table
     for (i, var_start_ptr) in var_start_ptrs.iter().enumerate() {
-        code.push(Instruction::JmpCND(*var_start_ptr, i as isize, 0));
+        code.push(Instruction::JmpCND{
+            target: *var_start_ptr,
+            value: i as isize,
+            delta: 0
+        });
     }
 
     // add a raise immediately after jump table to guard against wrong var indexes on the stack
-    code.push(Instruction::Raise(Exception::VariantIndexNotInJumpTable));
+    code.push(Instruction::Raise{ ex: Exception::VariantIndexNotInJumpTable });
 
     // finally add each of the variant implementations code and their Jmp to post definition
     for (i, (var_name, _)) in variants.iter().enumerate() {
         // recompile actual var code in order to get correct jump ptrs
         compile_type(src, var_name, code)?;
         if i < vars_count - 1 {
-            code.push(Instruction::Jmp(end_ptr));
+            code.push(Instruction::Jmp{ ptr: end_ptr });
         }
     }
 
@@ -288,15 +296,19 @@ pub fn compile_type<
     }
 
     if let Some(var_meta) = src.enums().iter().find(|v| v.name() == _type) {
+        code.push(Instruction::Struct {name: _type.to_string()});
         let maybe_err = compile_enum(src, var_meta, code);
-        return compile_or_raise!(
+        compile_or_raise!(
             maybe_err,
             "while compiling enum: {}",
             _type
-        );
+        )?;
+        code.push(Instruction::EndStruct);
+        return Ok(());
     }
 
     if let Some(struct_meta) = src.structs().iter().find(|s| s.name() == _type) {
+        code.push(Instruction::Struct {name: _type.to_string()});
         for field in struct_meta.fields() {
             let maybe_err = compile_type(src, field.type_name(), code);
             compile_or_raise!(
@@ -305,6 +317,7 @@ pub fn compile_type<
                 _type, field.name()
             )?;
         }
+        code.push(Instruction::EndStruct);
         return Ok(());
     }
 
@@ -328,7 +341,7 @@ pub fn compile_program<
             "\n\tWhile compiling program {}:\n\t{}",
             name, e.to_string())
         )?;
-    code.push(Instruction::Exit(0));
+    code.push(Instruction::Exit{status: 0});
     let base_size = code.iter()
         .map(|op| payload_base_size_of(op))
         .sum();

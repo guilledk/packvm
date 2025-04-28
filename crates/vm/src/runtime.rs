@@ -1,4 +1,4 @@
-use crate::payload_size;
+use crate::{debug_log, payload_size};
 use crate::{
     utils::PackerError,
     compiler::Program,
@@ -44,6 +44,13 @@ impl<'a> PackVM<'a> {
         let mut vm = PackVM::init(program, stack);
         let size = program.base_size + payload_size!(stack);
         let mut buffer: Vec<u8> = vec![0; size];
+
+        debug_log!("Running pack program: ");
+        #[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
+        for op in program.code.iter().enumerate() {
+            debug_log!("{:?}", op);
+        }
+        debug_log!("With stack: \n{:#?}", stack);
 
         pack::exec(&mut vm, &mut buffer)?;
 

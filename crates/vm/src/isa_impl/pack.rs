@@ -228,6 +228,21 @@ pub fn extension(vm: &mut PackVM, stride: u8) -> OpResult {
 }
 
 #[inline(always)]
+#[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
+pub fn structure(vm: &mut PackVM, name: &String) -> OpResult {
+    vmstep!(vm);
+    debug_log!(vm, "structure", "({})", name);
+    Ok(())
+}
+
+#[inline(always)]
+pub fn endstruct(vm: &mut PackVM) -> OpResult {
+    vmstep!(vm);
+    debug_log!(vm, "end structure", "()");
+    Ok(())
+}
+
+#[inline(always)]
 pub fn pushcnd(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
     match vm.iostack[vm.iop] {
         Value::Condition(cnd) => {
@@ -327,38 +342,55 @@ pub fn exec(vm: &mut PackVM, buffer: &mut Vec<u8>) -> Result<u8, PackerError> {
     match &vm.program.code[vm.ip] {
         Instruction::Bool => { boolean(vm, buffer)?; exec(vm, buffer) }
 
-        Instruction::UInt(1) => { uint8(vm, buffer)?; exec(vm, buffer) }
-        Instruction::UInt(2) => { uint16(vm, buffer)?; exec(vm, buffer) }
-        Instruction::UInt(4) => { uint32(vm, buffer)?; exec(vm, buffer) }
-        Instruction::UInt(8) => { uint64(vm, buffer)?; exec(vm, buffer) }
-        Instruction::UInt(16) => { uint128(vm, buffer)?; exec(vm, buffer) }
+        Instruction::UInt {size} => {
+            match size {
+                1 => { uint8(vm, buffer)?; exec(vm, buffer) },
+                2 => { uint16(vm, buffer)?; exec(vm, buffer) },
+                4 => { uint32(vm, buffer)?; exec(vm, buffer) },
+                8 => { uint64(vm, buffer)?; exec(vm, buffer) },
+                16 => { uint128(vm, buffer)?; exec(vm, buffer) },
+                _ => unreachable!()
+            }
+        }
 
-        Instruction::Int(1) => { int8(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Int(2) => { int16(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Int(4) => { int32(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Int(8) => { int64(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Int(16) => { int128(vm, buffer)?; exec(vm, buffer) }
+        Instruction::Int {size} => {
+            match size {
+                1 => { int8(vm, buffer)?; exec(vm, buffer) },
+                2 => { int16(vm, buffer)?; exec(vm, buffer) },
+                4 => { int32(vm, buffer)?; exec(vm, buffer) },
+                8 => { int64(vm, buffer)?; exec(vm, buffer) },
+                16 => { int128(vm, buffer)?; exec(vm, buffer) },
+                _ => unreachable!()
+            }
+        }
 
         Instruction::VarUInt => { varuint32(vm, buffer)?; exec(vm, buffer) }
         Instruction::VarInt => { varint32(vm, buffer)?; exec(vm, buffer) },
 
-        Instruction::Float(4) => { float32(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Float(8) => { float64(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Float(16) => { float128(vm, buffer)?; exec(vm, buffer) }
+        Instruction::Float {size} => {
+            match size {
+                4 => { float32(vm, buffer)?; exec(vm, buffer) },
+                8 => { float64(vm, buffer)?; exec(vm, buffer) },
+                16 => { float128(vm, buffer)?; exec(vm, buffer) },
+                _ => unreachable!()
+            }
+        }
 
         Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
-        Instruction::BytesRaw(l) => { bytes_raw(vm, buffer, *l)?; exec(vm, buffer) }
+        Instruction::BytesRaw{ size } => { bytes_raw(vm, buffer, *size)?; exec(vm, buffer) }
 
-        Instruction::Optional(s) => { optional(vm, buffer, *s)?; exec(vm, buffer) }
-        Instruction::Extension(s) => { extension(vm, *s)?; exec(vm, buffer) }
+        Instruction::Optional{ stride } => { optional(vm, buffer, *stride)?; exec(vm, buffer) }
+        Instruction::Extension{ stride } => { extension(vm, *stride)?; exec(vm, buffer) }
+
+        Instruction::Struct {name} => { structure(vm, name)?; exec(vm, buffer) }
+        Instruction::EndStruct => { endstruct(vm)?; exec(vm, buffer) }
 
         Instruction::PushCND => { pushcnd(vm, buffer)?; exec(vm, buffer) }
         Instruction::PopCND => { popcnd(vm)?; exec(vm, buffer) }
-        Instruction::Jmp(ptr) => { jmp(vm, *ptr)?; exec(vm, buffer) }
-        Instruction::JmpCND(t, v, d) => { jmpcnd(vm, *t, *v, *d)?; exec(vm, buffer) }
-        Instruction::JmpNotCND(t, v, d) => { jmpnotcnd(vm, *t, *v, *d)?; exec(vm, buffer) }
-        Instruction::Raise(e) => { raise(vm, e)?; exec(vm, buffer) }
-        Instruction::Exit(s) => { exit(vm, *s) }
-        _ => unreachable!()
+        Instruction::Jmp{ ptr} => { jmp(vm, *ptr)?; exec(vm, buffer) }
+        Instruction::JmpCND{target, value, delta} => { jmpcnd(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::JmpNotCND{target, value, delta} => { jmpnotcnd(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::Raise{ex} => { raise(vm, ex)?; exec(vm, buffer) }
+        Instruction::Exit{status} => { exit(vm, *status) }
     }
 }

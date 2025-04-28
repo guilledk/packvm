@@ -1009,6 +1009,7 @@ dependencies = [
 name = "packvm-macros"
 version = "0.1.0-alpha"
 dependencies = [
+ "proc-macro2",
  "quote",
  "syn 1.0.109",
 ]

@@ -130,13 +130,18 @@ fn test_unpack_extension() {
 #[test]
 fn test_unpack_struct() {
     #[derive(Serialize, PartialEq, Debug, EnumPacker, StackEnum)]
+    #[stack_name = "test_enum"]
     enum TestEnum {
+        #[stack_name = "test_enum_v0"]
         Type0(u64),
+        #[stack_name = "test_enum_v1"]
         Type1(f64),
+        #[stack_name = "test_enum_v2"]
         Type2(String),
     }
 
     #[derive(Serialize, PartialEq, Debug, StructPacker, StackStruct)]
+    #[stack_name = "test_struct"]
     struct TestStruct {
         field0: bool,
         field1: u32,

@@ -1,6 +1,20 @@
 pub mod varint;
 
 #[macro_export]
+#[cfg(feature = "debug_vm")]
+macro_rules! debug_log {
+    ($($args:tt)*) => {{
+        println!("{}", format_args!($($args)*));
+    }};
+}
+
+#[macro_export]
+#[cfg(not(feature = "debug_vm"))]
+macro_rules! debug_log {
+    ($($args:tt)*) => {{}};
+}
+
+#[macro_export]
 macro_rules! define_error {
     ($name:ident) => {
         #[derive(Debug, ::thiserror::Error)]
