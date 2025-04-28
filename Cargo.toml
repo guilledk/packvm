@@ -1,0 +1,21 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vm",
+    "crates/macros",
+]
+
+[workspace.package]
+version = "0.1.0-alpha"
+edition = "2021"
+rust-version = "1.75"
+authors = ["Guillermo Rodriguez"]
+license = "AGPL-3"
+homepage = "https://github.com/guilledk/packvm"
+repository = "https://github.com/guilledk/packvm"
+keywords = ["vm", "serialization"]
+categories = ["encoding"]
+
+[workspace.dependencies]
+packvm-macros.path = "crates/macros"
+antelope-client.path = "../antelope-rs/crates/antelope"
