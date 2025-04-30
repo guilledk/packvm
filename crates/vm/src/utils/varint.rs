@@ -90,9 +90,8 @@ impl VarInt32 {
     pub fn decode(bytes: &[u8]) -> Result<(Self, usize), &'static str> {
         let mut result = 0i32;
         let mut shift = 0;
-        let mut byte_read = 0u8;
         for (i, &b) in bytes.iter().enumerate() {
-            byte_read = b;
+            let byte_read = b;
             result |= ((b & 0x7F) as i32) << shift;
             shift += 7;
             if (b & 0x80) == 0 {

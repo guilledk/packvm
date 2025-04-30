@@ -48,6 +48,7 @@ Any other type should be able to be represented by a sequence of these types
 use std::cmp::PartialEq;
 use std::fmt;
 use std::fmt::Debug;
+use std::mem::discriminant;
 use crate::utils::varint::{VarInt32, VarUInt32};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -289,10 +290,8 @@ pub enum Instruction {
     Bytes,  // bytes with LEB128 encoded size first
     BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
     // these modify how the next instructions are handled
-    Optional{ stride: u8 },
-    Extension{ stride: u8 },
-    Struct{name: String},
-    EndStruct,
+    Optional,
+    Extension,
 
     // push condition from io stack into condition stack
     PushCND,
@@ -300,60 +299,107 @@ pub enum Instruction {
     PopCND,
 
     // jumps
-    Jmp{ ptr: usize },  // absolute jmp
+    Jmp { info: String, ptr: usize },  // absolute jmp
+    JmpRet{ info: String, ptr: usize },
+    ProgramJmp { name: String, ptr: usize, ret: usize },
 
     // conditional jumps based on first value on program stack
-    JmpCND{ target: usize, value: isize, delta: isize },  // target ptr, condition value, cnd delta to apply
-    JmpNotCND{ target: usize, value: isize, delta: isize },  // target ptr, condition value, cnd delta to apply
+    JmpCND{ ptrdelta: isize, value: isize, delta: isize },  // target ptr, condition value, cnd delta to apply
+    JmpNotCND{ ptrdelta: isize, value: isize, delta: isize },  // target ptr, condition value, cnd delta to apply
 
     // used to indicate a program shouldn't reach this instruction
     Raise{ ex: Exception },
 
     // stop the runtime
-    Exit{ status: u8 }
+    Exit,
+
+    // assembly
+    Section(String)
+}
+
+impl Instruction {
+    pub fn validate_asm(src: &Instruction, dst: &Instruction) -> bool {
+        match (src, dst) {
+            (Instruction::ProgramJmp {..}, Instruction::JmpRet { .. }) => true,
+            _ => {
+                discriminant(src) == discriminant(dst)
+            }
+        }
+    }
 }
 
 #[inline(always)]
 pub fn payload_base_size_of(instruction: &Instruction) -> usize {
     match instruction {
         #[allow(unused_variables)]
-        Instruction::Optional{stride} => 1,
+        Instruction::Optional => 1,
         _ => 0
     }
 }
+
+pub const STD_TYPES: [&str; 39] = [
+    "bool", "boolean",
+
+    "uint8", "u8",
+    "uint16", "u16",
+    "uint32", "u32",
+    "uint64", "u64",
+    "uint128", "u128",
+
+    "int8", "i8",
+    "int16", "i16",
+    "int32", "i32",
+    "int64", "i64",
+    "int128", "i128",
+
+    "uleb128", "varuint32",
+    "sleb128", "varint32",
+
+    "float32", "f32",
+    "float64", "f64",
+    "float128", "f128",
+
+    "bytes", "str", "string",
+
+    "sum160",
+    "sum256",
+    "sum512",
+
+    "raw",
+];
 
 #[macro_export]
 macro_rules! instruction_for {
     ($ty:expr) => {
         match $ty {
-            "bool" | "boolean" => Some(vec![Instruction::Bool]),
+            "bool" | "boolean" => Some(Instruction::Bool),
 
-            "uint8" | "u8" => Some(vec![Instruction::UInt{ size: 1 }]),
-            "uint16" | "u16" => Some(vec![Instruction::UInt{ size: 2 }]),
-            "uint32" | "u32" => Some(vec![Instruction::UInt{ size: 4 }]),
-            "uint64" | "u64" => Some(vec![Instruction::UInt{ size: 8 }]),
-            "uint128" | "u128" => Some(vec![Instruction::UInt{ size: 16 }]),
+            "uint8" | "u8" => Some(Instruction::UInt{ size: 1 }),
+            "uint16" | "u16" => Some(Instruction::UInt{ size: 2 }),
+            "uint32" | "u32" => Some(Instruction::UInt{ size: 4 }),
+            "uint64" | "u64" => Some(Instruction::UInt{ size: 8 }),
+            "uint128" | "u128" => Some(Instruction::UInt{ size: 16 }),
 
-            "int8" | "i8" => Some(vec![Instruction::Int{ size: 1 }]),
-            "int16" | "i16" => Some(vec![Instruction::Int{ size: 2 }]),
-            "int32" | "i32" => Some(vec![Instruction::Int{ size: 4 }]),
-            "int64" | "i64" => Some(vec![Instruction::Int{ size: 8 }]),
-            "int128" | "i128" => Some(vec![Instruction::Int{ size: 16 }]),
+            "int8" | "i8" => Some(Instruction::Int{ size: 1 }),
+            "int16" | "i16" => Some(Instruction::Int{ size: 2 }),
+            "int32" | "i32" => Some(Instruction::Int{ size: 4 }),
+            "int64" | "i64" => Some(Instruction::Int{ size: 8 }),
+            "int128" | "i128" => Some(Instruction::Int{ size: 16 }),
 
-            "uleb128" | "varuint32" => Some(vec![Instruction::VarUInt]),
-            "sleb128" | "varint32" => Some(vec![Instruction::VarInt]),
+            "uleb128" | "varuint32" => Some(Instruction::VarUInt),
+            "sleb128" | "varint32" => Some(Instruction::VarInt),
 
-            "float32" | "f32" => Some(vec![Instruction::Float{ size: 4 }]),
-            "float64" | "f64" => Some(vec![Instruction::Float{ size: 8 }]),
-            "float128" | "f128" => Some(vec![Instruction::Float{ size: 16 }]),
+            "float32" | "f32" => Some(Instruction::Float{ size: 4 }),
+            "float64" | "f64" => Some(Instruction::Float{ size: 8 }),
+            "float128" | "f128" => Some(Instruction::Float{ size: 16 }),
 
-            "bytes" | "str" | "string" => Some(vec![Instruction::Bytes]),
+            "bytes" | "str" | "string" => Some(Instruction::Bytes),
 
-            "sum160" => Some(vec![Instruction::BytesRaw{ size: 20 }]),
-            "sum256" => Some(vec![Instruction::BytesRaw{ size: 32 }]),
-            "sum512" => Some(vec![Instruction::BytesRaw{ size: 64 }]),
+            "sum160" => Some(Instruction::BytesRaw{ size: 20 }),
+            "sum256" => Some(Instruction::BytesRaw{ size: 32 }),
+            "sum512" => Some(Instruction::BytesRaw{ size: 64 }),
 
-            "raw" => Some(vec![Instruction::BytesRaw{ size: 0 }]),
+            "raw" => Some(Instruction::BytesRaw{ size: 0 }),
 
             _ => None,
         }

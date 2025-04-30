@@ -1,5 +1,5 @@
 use tailcall::tailcall;
-use crate::packer_error;
+use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, raise};
 use crate::{
     utils::{
         PackerError,
@@ -10,7 +10,6 @@ use crate::{
     isa_impl::common::OpResult,
     Value,
     Instruction,
-    Exception,
     PackVM
 };
 
@@ -20,8 +19,8 @@ macro_rules! type_mismatch {
     };
 }
 
-#[cfg(feature = "debug_vm")]
-macro_rules! debug_log {
+#[cfg(feature = "debug")]
+macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
             "ip({:4}) sp({:4}) csp({:4}) cnd({:4}) | {:80} | s: {:?}",
@@ -35,8 +34,8 @@ macro_rules! debug_log {
     }};
 }
 
-#[cfg(not(feature = "debug_vm"))]
-macro_rules! debug_log {
+#[cfg(not(feature = "debug"))]
+macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{}};
 }
 
@@ -69,7 +68,7 @@ macro_rules! impl_pack_op {
                 }
                 _ => return type_mismatch!(stringify!($variant), vm),
             }
-            debug_log!(vm, $dbg, "()");
+            vmlog!(vm, $dbg, "()");
             Ok(())
         }
     )*};
@@ -108,7 +107,7 @@ pub fn boolean(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
         }
         _ => return type_mismatch!("VarUInt32", vm)
     }
-    debug_log!(vm, "varuint32", "()");
+    vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
@@ -122,7 +121,7 @@ pub fn varuint32(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
         }
         _ => return type_mismatch!("VarUInt32", vm)
     }
-    debug_log!(vm, "varuint32", "()");
+    vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
@@ -136,7 +135,7 @@ pub fn varint32(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
         }
         _ => return type_mismatch!("VarUInt32", vm)
     }
-    debug_log!(vm, "varuint32", "()");
+    vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
@@ -149,7 +148,7 @@ pub fn float128(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
         }
         _ => return type_mismatch!("Float128", vm)
     }
-    debug_log!(vm, "float128", "()");
+    vmlog!(vm, "float128", "()");
     Ok(())
 }
 
@@ -166,7 +165,7 @@ pub fn bytes(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
         }
         _ => return type_mismatch!("Bytes", vm)
     }
-    debug_log!(vm, "bytes", "()");
+    vmlog!(vm, "bytes", "()");
     Ok(())
 }
 
@@ -182,23 +181,23 @@ pub fn bytes_raw(vm: &mut PackVM, buffer: &mut Vec<u8>, len: u8) -> OpResult {
         }
         _ => return type_mismatch!("Bytes", vm)
     }
-    debug_log!(vm, "bytes_raw", "({})", len);
+    vmlog!(vm, "bytes_raw", "({})", len);
     Ok(())
 }
 
 #[inline(always)]
-pub fn optional(vm: &mut PackVM, buffer: &mut Vec<u8>, stride: u8) -> OpResult {
+pub fn optional(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
     match &vm.iostack[vm.iop] {
         Value::None => {
             buffer[vm.bp] = 0u8;
             vm.iop += 1;                     // pop the None
-            vm.ip += stride as usize + 1;   // jump over wrapped code
-            debug_log!(vm, "optional none", "({})", stride);
+            vm.ip += 2;   // jump over wrapped code
+            vmlog!(vm, "optional none", "()");
         }
         _ => {
             buffer[vm.bp] = 1u8;
             vm.ip += 1;                     // execute wrapped code next
-            debug_log!(vm, "optional some", "({})", stride);
+            vmlog!(vm, "optional some", "()");
         }
     }
     vm.bp += 1;
@@ -206,39 +205,24 @@ pub fn optional(vm: &mut PackVM, buffer: &mut Vec<u8>, stride: u8) -> OpResult {
 }
 
 #[inline(always)]
-pub fn extension(vm: &mut PackVM, stride: u8) -> OpResult {
+pub fn extension(vm: &mut PackVM) -> OpResult {
     match vm.iostack.get(vm.iop) {
         Some(Value::None) => {
             vm.iop += 1;                         // pop the sentinel
-            vm.ip += stride as usize + 1;       // jump over wrapped code
-            debug_log!(vm, "extension none", "({})", stride);
+            vm.ip += 2;       // jump over wrapped code
+            vmlog!(vm, "extension none", "()");
         }
 
         Some(_) => {
             vm.ip += 1;
-            debug_log!(vm, "extension", "({})", stride);
+            vmlog!(vm, "extension", "()");
         }
 
         None => {
-            vm.ip += stride as usize + 1;       // skip wrapped code
-            debug_log!(vm, "extension stack empty", "({})", stride);
+            vm.ip += 2;       // skip wrapped code
+            vmlog!(vm, "extension stack empty", "()");
         }
     }
-    Ok(())
-}
-
-#[inline(always)]
-#[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
-pub fn structure(vm: &mut PackVM, name: &String) -> OpResult {
-    vmstep!(vm);
-    debug_log!(vm, "structure", "({})", name);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn endstruct(vm: &mut PackVM) -> OpResult {
-    vmstep!(vm);
-    debug_log!(vm, "end structure", "()");
     Ok(())
 }
 
@@ -254,91 +238,13 @@ pub fn pushcnd(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
         }
         _ => return type_mismatch!("Condition", vm)
     }
-    debug_log!(vm, "pushcnd", " io -> ({})", vm.cndstack[vm.cndstack.len() - 1]);
+    vmlog!(vm, "pushcnd", " io -> ({})", vm.cndstack[vm.cndstack.len() - 1]);
     Ok(())
-}
-
-#[inline(always)]
-pub fn popcnd(vm: &mut PackVM) -> OpResult {
-    vm.cndstack.pop();
-    vm.csp -= 1;
-    vm.ip += 1;
-    debug_log!(vm, "popcnd", "()");
-    Ok(())
-}
-
-pub fn jmp(vm: &mut PackVM, ptr: usize) -> OpResult {
-    vm.ip = ptr;
-    debug_log!(vm, "jmp", "({})", ptr);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn jmpcnd(vm: &mut PackVM, target: usize, value: isize, delta: isize) -> OpResult {
-    vm.cndstack[vm.csp] += delta;
-    if vm.cndstack[vm.csp] == value {
-        vm.ip = target;       // branch taken
-        debug_log!(
-            vm,
-            "jmpcnd",
-            "(t: {}, v: {}, d: {}) triggered", target, value, delta
-        );
-    } else {
-        vm.ip += 1;           // fall-through
-        debug_log!(
-            vm,
-            "jmpcnd",
-            "(t: {}, v: {}, d: {})", target, value, delta
-        );
-    }
-    Ok(())
-}
-
-#[inline(always)]
-pub fn jmpnotcnd(vm: &mut PackVM, target: usize, value: isize, delta: isize) -> OpResult {
-    vm.cndstack[vm.csp] += delta;
-    if vm.cndstack[vm.csp] != value {
-        vm.ip = target;       // branch taken
-        debug_log!(
-            vm,
-            "jmpnotcnd",
-            "(t: {}, v: {}, d: {}) triggered", target, value, delta
-        );
-    } else {
-        vm.ip += 1;           // fall-through
-        debug_log!(
-            vm,
-            "jmpnotcnd",
-            "(t: {}, v: {}, d: {})", target, value, delta
-        );
-    }
-    Ok(())
-}
-
-#[inline(always)]
-#[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
-pub fn raise(vm: &PackVM, e: &Exception) -> OpResult {
-    debug_log!(
-        vm,
-        "raise",
-        "({:?})", e
-    );
-    Err(packer_error!("raise exception: {:?}", e))
-}
-
-#[inline(always)]
-#[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
-pub fn exit(vm: &mut PackVM, status: u8) -> Result<u8, PackerError> {
-    debug_log!(
-        vm,
-        "exit",
-        "({})", status
-    );
-    Ok(status)
 }
 
 #[tailcall]
-pub fn exec(vm: &mut PackVM, buffer: &mut Vec<u8>) -> Result<u8, PackerError> {
+#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
+pub fn exec(vm: &mut PackVM, buffer: &mut Vec<u8>) -> Result<(), PackerError> {
     match &vm.program.code[vm.ip] {
         Instruction::Bool => { boolean(vm, buffer)?; exec(vm, buffer) }
 
@@ -379,18 +285,24 @@ pub fn exec(vm: &mut PackVM, buffer: &mut Vec<u8>) -> Result<u8, PackerError> {
         Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
         Instruction::BytesRaw{ size } => { bytes_raw(vm, buffer, *size)?; exec(vm, buffer) }
 
-        Instruction::Optional{ stride } => { optional(vm, buffer, *stride)?; exec(vm, buffer) }
-        Instruction::Extension{ stride } => { extension(vm, *stride)?; exec(vm, buffer) }
-
-        Instruction::Struct {name} => { structure(vm, name)?; exec(vm, buffer) }
-        Instruction::EndStruct => { endstruct(vm)?; exec(vm, buffer) }
+        Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
+        Instruction::Extension => { extension(vm)?; exec(vm, buffer) }
 
         Instruction::PushCND => { pushcnd(vm, buffer)?; exec(vm, buffer) }
-        Instruction::PopCND => { popcnd(vm)?; exec(vm, buffer) }
-        Instruction::Jmp{ ptr} => { jmp(vm, *ptr)?; exec(vm, buffer) }
-        Instruction::JmpCND{target, value, delta} => { jmpcnd(vm, *target, *value, *delta)?; exec(vm, buffer) }
-        Instruction::JmpNotCND{target, value, delta} => { jmpnotcnd(vm, *target, *value, *delta)?; exec(vm, buffer) }
-        Instruction::Raise{ex} => { raise(vm, ex)?; exec(vm, buffer) }
-        Instruction::Exit{status} => { exit(vm, *status) }
+        Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
+        Instruction::Jmp{ info: _, ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
+        Instruction::JmpRet{info, ptr} => { jmpret!(vm, *info, *ptr); exec(vm, buffer) }
+        Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::Raise{ex} => { raise!(vm, ex)?; exec(vm, buffer) }
+        Instruction::Exit => {
+            if exit!(vm)? {
+                Ok(())
+            } else {
+                exec(vm, buffer)
+            }
+        }
+        Instruction::Section(name) => { Err(packer_error!("Reached section instruction: {}", name))}
+        Instruction::ProgramJmp{..} => { Err(packer_error!("Reached program jmp instruction")) },
     }
 }

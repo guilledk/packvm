@@ -1,4 +1,4 @@
-use antelope::chain::abi::{ABIResolvedType, ABITypeResolver, ABIView, AbiField, AbiStruct, AbiTypeDef, AbiVariant, ShipABI, ABI};
+use antelope::chain::abi::{ABIResolvedType, ABITypeResolver, ABIView, AbiField, AbiStruct, AbiTypeDef, AbiVariant, ShipABI, ABI, STD_TYPES};
 use antelope::chain::binary_extension::BinaryExtension;
 use antelope::serializer::Packer;
 use crate::compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef};
@@ -45,6 +45,7 @@ impl StructDef<AbiField> for AbiStruct {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct AntelopeSourceCode {
     aliases: Vec<AbiTypeDef>,
     structs: Vec<AbiStruct>,
@@ -79,10 +80,36 @@ fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), 
     Ok(())
 }
 
+fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>) {
+    for (new_type, alias_type) in [
+        ("name", "u64"),
+        ("checksum160", "sum160"),
+        ("checksum256", "sum256"),
+        ("checksum512", "sum512"),
+
+        ("transaction_id", "sum256"),
+
+        ("time_point", "u64"),
+        ("time_point_sec", "u32"),
+        ("block_timestamp_type", "u32"),
+
+        ("public_key", "raw"),
+        ("signature", "raw")
+
+    ] {
+        aliases.insert(0, AbiTypeDef {
+            new_type_name: new_type.to_string(),
+            r#type: alias_type.to_string()
+        });
+    }
+}
+
 impl TryFrom<ABI> for AntelopeSourceCode {
     type Error = TypeCompileError;
     fn try_from(abi: ABI) -> Result<AntelopeSourceCode, TypeCompileError> {
-        let aliases = abi.types().to_vec();
+        let mut aliases = abi.types().to_vec();
+        include_antelope_stdtypes(&mut aliases);
+
         let enums = abi.variants().to_vec();
         let mut structs = abi.structs().to_vec();
         for struct_def in structs.iter_mut() {
@@ -99,7 +126,9 @@ impl TryFrom<ABI> for AntelopeSourceCode {
 impl TryFrom<ShipABI> for AntelopeSourceCode {
     type Error = TypeCompileError;
     fn try_from(abi: ShipABI) -> Result<AntelopeSourceCode, TypeCompileError> {
-        let aliases = abi.types().to_vec();
+        let mut aliases = abi.types().to_vec();
+        include_antelope_stdtypes(&mut aliases);
+
         let enums = abi.variants().to_vec();
         let mut structs = abi.structs().to_vec();
         for struct_def in structs.iter_mut() {
@@ -129,6 +158,35 @@ impl SourceCode<
 
     fn aliases(&self) -> &[AbiTypeDef] {
         self.aliases.as_slice()
+    }
+
+    fn resolve_alias(&self, alias: &str) -> Option<String> {
+        if let Some(t) = self.aliases.iter().find(|a| a.new_type_name == alias) {
+            Some(t.r#type.clone())
+        } else {
+            None
+        }
+    }
+
+    fn is_std_type(&self, ty: &str) -> bool {
+        let ty = match self.resolve_alias(ty) {
+            Some(ty) => ty,
+            None => ty.to_string()
+        };
+        STD_TYPES.contains(&ty.as_str())
+    }
+
+    fn is_alias_of(&self, alias: &str, ty: &str) -> bool {
+        self.aliases.iter()
+            .any(|a| a.new_type_name == alias && a.r#type == ty)
+    }
+
+    fn is_variant_of(&self, ty: &str, var: &str) -> bool {
+        match self.enums.iter()
+            .find(|e| e.name == var) {
+            Some(variant) => variant.types.contains(&ty.to_string()),
+            None => false
+        }
     }
 }
 

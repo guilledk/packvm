@@ -1,5 +1,5 @@
 use tailcall::tailcall;
-use crate::packer_error;
+use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, raise};
 use crate::{
     utils::{
         PackerError,
@@ -8,12 +8,11 @@ use crate::{
     isa_impl::common::OpResult,
     Value,
     Instruction,
-    Exception,
     UnpackVM
 };
 
-#[cfg(feature = "debug_vm")]
-macro_rules! debug_log {
+#[cfg(feature = "debug")]
+macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
             "ip({:4}) sp({:4}) csp({:4}) cnd({:4}) | {:80} | s: {:?}",
@@ -27,8 +26,8 @@ macro_rules! debug_log {
     }};
 }
 
-#[cfg(not(feature = "debug_vm"))]
-macro_rules! debug_log {
+#[cfg(not(feature = "debug"))]
+macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{}};
 }
 
@@ -59,7 +58,7 @@ macro_rules! impl_unpack_op {
             vm.iostack.push(Value::$variant(val));
 
             vmstep!(vm);
-            debug_log!(vm, $dbg, "()");
+            vmlog!(vm, $dbg, "()");
             Ok(())
         }
     )*};
@@ -92,7 +91,7 @@ pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     vm.iostack.push(Value::Bool(val));
     vm.bp += 1;
     vmstep!(vm);
-    debug_log!(vm, "bool", "()");
+    vmlog!(vm, "bool", "()");
     Ok(())
 }
 
@@ -103,7 +102,7 @@ pub fn varuint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     vm.iostack.push(Value::VarUInt32(val.0));
     vm.bp += val_size;
     vmstep!(vm);
-    debug_log!(vm, "varuint32", "()");
+    vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
@@ -114,7 +113,7 @@ pub fn varint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     vm.iostack.push(Value::VarInt32(val.0));
     vm.bp += val_size;
     vmstep!(vm);
-    debug_log!(vm, "varint32", "()");
+    vmlog!(vm, "varint32", "()");
     Ok(())
 }
 
@@ -127,7 +126,7 @@ pub fn float128(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     vm.iostack.push(Value::Float128(float_raw));
     vm.bp += 16;
     vmstep!(vm);
-    debug_log!(vm, "float128", "()");
+    vmlog!(vm, "float128", "()");
     Ok(())
 }
 
@@ -140,7 +139,7 @@ pub fn bytes(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     let raw = vmunpack!(vm, buffer, len.0 as usize);
     vm.iostack.push(Value::Bytes(raw.to_vec()));
     vmstep!(vm);
-    debug_log!(vm, "bytes", "()");
+    vmlog!(vm, "bytes", "()");
     Ok(())
 }
 
@@ -149,50 +148,34 @@ pub fn bytes_raw(vm: &mut UnpackVM, len: u8, buffer: &[u8]) -> OpResult {
     let raw = vmunpack!(vm, buffer, len as usize);
     vm.iostack.push(Value::Bytes(raw.to_vec()));
     vmstep!(vm);
-    debug_log!(vm, "bytes_raw", "({})", len);
+    vmlog!(vm, "bytes_raw", "({})", len);
     Ok(())
 }
 
 #[inline(always)]
-pub fn optional(vm: &mut UnpackVM, stride: u8, buffer: &[u8]) -> OpResult {
+pub fn optional(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     if buffer[vm.bp] == 1 {
         vm.ip += 1;
-        debug_log!(vm, "optional some", "({})", stride);
+        vmlog!(vm, "optional some", "()");
     } else {
         vm.iostack.push(Value::None);
-        vm.ip += stride as usize + 1;
-        debug_log!(vm, "optional none", "({})", stride);
+        vm.ip += 2;
+        vmlog!(vm, "optional none", "()");
     }
     vm.bp += 1;
     Ok(())
 }
 
 #[inline(always)]
-pub fn extension(vm: &mut UnpackVM, stride: u8, buffer: &[u8]) -> OpResult {
+pub fn extension(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     if vm.bp == buffer.len() {
         vm.iostack.push(Value::None);
-        vm.ip += stride as usize + 1;
-        debug_log!(vm, "extension stack empty", "({})", stride);
+        vm.ip += 2;
+        vmlog!(vm, "extension stack empty", "()");
     } else {
         vm.ip += 1;
-        debug_log!(vm, "extension", "({})", stride);
+        vmlog!(vm, "extension", "()");
     }
-    Ok(())
-}
-
-#[inline(always)]
-pub fn structure(vm: &mut UnpackVM, name: &String) -> OpResult {
-    vm.iostack.push(Value::Struct(name.to_string()));
-    vmstep!(vm);
-    debug_log!(vm, "structure", "({})", name);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn endstruct(vm: &mut UnpackVM) -> OpResult {
-    vm.iostack.push(Value::EndStruct);
-    vmstep!(vm);
-    debug_log!(vm, "end structure", "()");
     Ok(())
 }
 
@@ -207,91 +190,13 @@ pub fn pushcnd(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     vm.cndstack.push(cnd);
     vm.csp += 1;
     vmstep!(vm);
-    debug_log!(vm, "pushcnd", "io -> ({})", cnd);
+    vmlog!(vm, "pushcnd", "io -> ({})", cnd);
     Ok(())
-}
-
-#[inline(always)]
-pub fn popcnd(vm: &mut UnpackVM) -> OpResult {
-    vm.cndstack.pop();
-    vm.csp -= 1;
-    vm.ip += 1;
-    debug_log!(vm, "popcnd", "()");
-    Ok(())
-}
-
-pub fn jmp(vm: &mut UnpackVM, ptr: usize) -> OpResult {
-    vm.ip = ptr;
-    debug_log!(vm, "jmp", "({})", ptr);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn jmpcnd(vm: &mut UnpackVM, target: usize, value: isize, delta: isize) -> OpResult {
-    vm.cndstack[vm.csp] += delta;
-    if vm.cndstack[vm.csp] == value {
-        vm.ip = target;       // branch taken
-        debug_log!(
-            vm,
-            "jmpcnd",
-            "(t: {}, v: {}, d: {}) triggered", target, value, delta
-        );
-    } else {
-        vm.ip += 1;           // fall-through
-        debug_log!(
-            vm,
-            "jmpcnd",
-            "(t: {}, v: {}, d: {})", target, value, delta
-        );
-    }
-    Ok(())
-}
-
-#[inline(always)]
-pub fn jmpnotcnd(vm: &mut UnpackVM, target: usize, value: isize, delta: isize) -> OpResult {
-    vm.cndstack[vm.csp] += delta;
-    if vm.cndstack[vm.csp] != value {
-        vm.ip = target;       // branch taken
-        debug_log!(
-            vm,
-            "jmpnotcnd",
-            "(t: {}, v: {}, d: {}) triggered", target, value, delta
-        );
-    } else {
-        vm.ip += 1;           // fall-through
-        debug_log!(
-            vm,
-            "jmpnotcnd",
-            "(t: {}, v: {}, d: {})", target, value, delta
-        );
-    }
-    Ok(())
-}
-
-#[inline(always)]
-#[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
-pub fn raise(vm: &UnpackVM, e: &Exception) -> OpResult {
-    debug_log!(
-        vm,
-        "raise",
-        "({:?})", e
-    );
-    Err(packer_error!("raise exception: {:?}", e))
-}
-
-#[inline(always)]
-#[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
-pub fn exit(vm: &mut UnpackVM, status: u8) -> Result<u8, PackerError> {
-    debug_log!(
-        vm,
-        "exit",
-        "({})", status
-    );
-    Ok(status)
 }
 
 #[tailcall]
-pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<u8, PackerError> {
+#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
+pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
     match &vm.program.code[vm.ip] {
         Instruction::Bool => { boolean(vm, buffer)?; exec(vm, buffer) }
 
@@ -332,22 +237,24 @@ pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<u8, PackerError> {
         Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
         Instruction::BytesRaw{ size } => { bytes_raw(vm, *size, buffer)?; exec(vm, buffer) }
 
-        Instruction::Optional{ stride } => { optional(vm, *stride, buffer)?; exec(vm, buffer) }
-        Instruction::Extension{ stride } => { extension(vm, *stride, buffer)?; exec(vm, buffer) }
-
-        Instruction::Struct {name} => { structure(vm, name)?; exec(vm, buffer) }
-        Instruction::EndStruct => { endstruct(vm)?; exec(vm, buffer) }
+        Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
+        Instruction::Extension => { extension(vm, buffer)?; exec(vm, buffer) }
 
         Instruction::PushCND => { pushcnd(vm, buffer)?; exec(vm, buffer) }
-        Instruction::PopCND => { popcnd(vm)?; exec(vm, buffer) }
-        Instruction::Jmp{ ptr } => { jmp(vm, *ptr)?; exec(vm, buffer) }
-        Instruction::JmpCND{ target, value, delta } => {
-            jmpcnd(vm, *target, *value, *delta)?; exec(vm, buffer)
+        Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
+        Instruction::Jmp{ info: _, ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
+        Instruction::JmpRet{info, ptr} => { jmpret!(vm, *info, *ptr); exec(vm, buffer) }
+        Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::Raise{ex} => { raise!(vm, ex)?; exec(vm, buffer) }
+        Instruction::Exit => {
+            if exit!(vm)? {
+                Ok(())
+            } else {
+                exec(vm, buffer)
+            }
         }
-        Instruction::JmpNotCND{ target, value, delta } => {
-            jmpnotcnd(vm, *target, *value, *delta)?; exec(vm, buffer)
-        }
-        Instruction::Raise{ ex } => { raise(vm, ex)?; exec(vm, buffer) }
-        Instruction::Exit{ status } => { exit(vm, *status) }
+        Instruction::Section(name) => { Err(packer_error!("Reached section instruction: {}", name))},
+        Instruction::ProgramJmp{..} => { Err(packer_error!("Reached program jmp instruction")) },
     }
 }

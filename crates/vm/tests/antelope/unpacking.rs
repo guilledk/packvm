@@ -8,18 +8,11 @@ use antelope::{
     serializer::{Encoder, Decoder, Packer, PackerError},
     EnumPacker, StructPacker
 };
-use packvm::{
-    UnpackVM,
-    Value,
-    IOStackValue,
-    IntoIOStack,
-    compiler::{
-        antelope::AntelopeSourceCode,
-        compile_program
-    },
-    compile_or_panic,
-    compile,
-};
+use packvm::{UnpackVM, Value, IOStackValue, IntoIOStack, compiler::{
+    antelope::AntelopeSourceCode,
+    compile_program
+}, compile_or_panic, compile, Instruction};
+use packvm::compiler::{compile_type_ops, Program};
 use packvm_macros::{StackStruct, StackEnum};
 
 const STDABI: &str = include_str!("std_abi.json");
@@ -30,8 +23,15 @@ const TESTABI: &str = include_str!("test_abi.json");
 macro_rules! unpack_and_assert {
     ($type_name:expr, $bytes:expr, $expected:expr $(,)?) => {{
         let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
-        let abi_src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
-        let program = compile!(&abi_src, $type_name);
+        let abi_str = AntelopeSourceCode::try_from(abi).expect("failed to unwrap into source");
+        let mut program = Program {
+            id: 0,
+            name: $type_name.to_string(),
+            code: vec![compile_type_ops(&abi_str, $type_name).expect("failed to compile")],
+            deps: Vec::new(),
+            base_size: 0
+        };
+        program.code.push(Instruction::Exit);
         let decoded = UnpackVM::run(&program, $bytes).expect("Unpack failed");
         assert_eq!(decoded, $expected);
     }};

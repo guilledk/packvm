@@ -13,6 +13,7 @@ pub struct PackVM<'a> {
     pub(crate) csp: usize,
 
     pub(crate) cndstack:   Vec<isize>,
+    pub(crate) retstack:   Vec<usize>,
 
     pub(crate) iostack:      &'a [Value],
     pub(crate) program: &'a Program,
@@ -29,6 +30,7 @@ impl<'a> PackVM<'a> {
             iop: 0,
             csp: 0,
             cndstack: vec![0],
+            retstack: vec![0],
 
             iostack,
             program
@@ -46,7 +48,7 @@ impl<'a> PackVM<'a> {
         let mut buffer: Vec<u8> = vec![0; size];
 
         debug_log!("Running pack program: ");
-        #[cfg_attr(not(feature = "debug_vm"), allow(unused_variables))]
+        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
         for op in program.code.iter().enumerate() {
             debug_log!("{:?}", op);
         }
@@ -64,6 +66,7 @@ pub struct UnpackVM<'a> {
     pub(crate) csp: usize,
 
     pub(crate) cndstack:   Vec<isize>,
+    pub(crate) retstack:   Vec<usize>,
 
     pub(crate) iostack: Vec<Value>,
     pub(crate) program: &'a Program
@@ -77,6 +80,7 @@ impl<'a> UnpackVM<'a> {
             csp: 0,
 
             cndstack: vec![0],
+            retstack: vec![0],
 
             iostack: Vec::new(),
             program
@@ -91,7 +95,15 @@ impl<'a> UnpackVM<'a> {
     ) -> Result<Vec<Value>, PackerError> {
         let mut vm = UnpackVM::init(program);
 
+        debug_log!("Running unpack program: ");
+        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
+        for op in program.code.iter().enumerate() {
+            debug_log!("{:?}", op);
+        }
+
         unpack::exec(&mut vm, buffer)?;
+
+        debug_log!("Output stack: \n{:#?}", vm.iostack);
 
         Ok(vm.iostack)
     }
