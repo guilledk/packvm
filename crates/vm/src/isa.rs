@@ -86,9 +86,10 @@ pub enum Value {
     Float128([u8; 16]),
 
     Bytes(Vec<u8>),
+    String(String),
 
     Array(Vec<Value>),
-    Struct(String, HashMap<String, Value>),
+    Struct(HashMap<String, Value>),
 }
 
 
@@ -186,19 +187,19 @@ impl_value_from!(
 
 impl From<String> for Value {
     fn from(s: String) -> Self {
-        Value::Bytes(s.into_bytes())
+        Value::String(s)
     }
 }
 
 impl From<&String> for Value {
     fn from(s: &String) -> Self {
-        Value::Bytes(s.clone().into_bytes())
+        Value::String(s.clone())
     }
 }
 
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
-        Value::Bytes(value.as_bytes().to_vec())
+        Value::String(value.to_string())
     }
 }
 
@@ -262,10 +263,10 @@ impl fmt::Display for Value {
             Value::Float128(bytes) => write!(f, "Float128({:02x?})", bytes),
 
             Value::Bytes(vec) => write!(f, "Bytes({:02x?})", vec),
-
+            Value::String(s) => write!(f, "String({})", s),
 
             Value::Array(vals) => write!(f, "Array({:?})", vals),
-            Value::Struct(name, fields) => write!(f, "Struct({}, {:?})", name, fields),
+            Value::Struct(fields) => write!(f, "Struct({:?})", fields),
         }
     }
 }
@@ -281,6 +282,7 @@ pub enum Instruction {
     Float{ size: u8 },
     Bytes,  // bytes with LEB128 encoded size first
     BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
+    String,  // utf-8 string with LEB128 encoded len
 
     Optional,  // next value is optional, encode a flag as a u8 before
     Extension,  // extensions are like optionals but they dont encode a flag in a u8
@@ -394,7 +396,8 @@ macro_rules! instruction_for {
             "float64" | "f64" => Some(Instruction::Float{ size: 8 }),
             "float128" | "f128" => Some(Instruction::Float{ size: 16 }),
 
-            "bytes" | "str" | "string" => Some(Instruction::Bytes),
+            "bytes" => Some(Instruction::Bytes),
+            "str" | "string" => Some(Instruction::String),
 
             "sum160" => Some(Instruction::BytesRaw{ size: 20 }),
             "sum256" => Some(Instruction::BytesRaw{ size: 32 }),
@@ -455,8 +458,8 @@ impl IOValue for Vec<String> {
     fn as_io(&self) -> Value {
         let mut val = Vec::new();
         self.iter()
-            .map(|s| s.clone().into_bytes().into())
-            .for_each(|raw| val.push(Value::Bytes(raw)));
+            .map(|s| s.clone().into())
+            .for_each(|item| val.push(Value::String(item)));
 
         Value::Array(val)
     }

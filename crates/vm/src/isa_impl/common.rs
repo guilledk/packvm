@@ -102,7 +102,7 @@ macro_rules! section {
         let fname = $vm.executable.str_map.get_by_left(&$id)
             .ok_or(crate::packer_error!("Failed to resolve struct name from section id: {}", $id))?;
 
-        $vm.ionsp.push(NamespacePart::StructNode($ctype, fname.clone()));
+        $vm.ionsp.push(NamespacePart::StructNode($ctype));
         $vm.ip += 1;
 
         vmlog!(
@@ -118,7 +118,7 @@ macro_rules! section {
 macro_rules! field {
     ($vm:ident, $id:expr) => {{
         match $vm.nsp_last() {
-            NamespacePart::StructNode(_, _) => (),
+            NamespacePart::StructNode(_) => (),
             NamespacePart::StructField(_) => { $vm.ionsp.pop(); },
             _ => return Err(crate::packer_error!("Expected Struct on nsp last, but got {:?}", $vm.nsp_last())),
         }
@@ -141,7 +141,7 @@ macro_rules! field {
 macro_rules! exit {
     ($vm:ident) => {{
         match $vm.nsp_last() {
-            NamespacePart::StructNode(_, _) => { $vm.ionsp.pop(); }
+            NamespacePart::StructNode(_) => { $vm.ionsp.pop(); }
             NamespacePart::StructField(_) => {
                 $vm.ionsp.pop();
                 $vm.ionsp.pop();

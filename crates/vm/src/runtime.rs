@@ -13,7 +13,7 @@ pub enum NamespacePart {
     ArrayNode,
     ArrayIndex,
 
-    StructNode(u8, String),
+    StructNode(u8),
     StructField(String),
 }
 
@@ -23,11 +23,11 @@ impl Into<String> for &NamespacePart {
             NamespacePart::Root => "$".to_string(),
             NamespacePart::ArrayNode => "array".to_string(),
             NamespacePart::ArrayIndex => "idx".to_string(),
-            NamespacePart::StructNode(ctype, name) => match ctype {
-                1u8 => format!("enum({})", name),
-                2u8 => format!("struct({})", name),
+            NamespacePart::StructNode(ctype) => match ctype {
+                1u8 => "enum",
+                2u8 => "struct",
                 _ => unreachable!()
-            },
+            }.to_string(),
             NamespacePart::StructField(name) => name.clone(),
         }
     }

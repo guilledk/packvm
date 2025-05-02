@@ -67,7 +67,7 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
 
         // struct field access
         NamespacePart::StructField(name) => {
-            if let Value::Struct(_, ref mut fields) = io {
+            if let Value::Struct(ref mut fields) = io {
                 let val = fields.entry(name.clone()).or_insert(Value::None);
                 vmiomut(val, &nsp[1..])
             } else {
@@ -82,9 +82,9 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
             vmiomut(io, &nsp[1..])
         }
 
-        NamespacePart::StructNode(_ctype, name) => {
+        NamespacePart::StructNode(_ctype) => {
             if let Value::None = io {
-                *io = Value::Struct(name.clone(), HashMap::new());
+                *io = Value::Struct(HashMap::new());
             }
             vmiomut(io, &nsp[1..])
         }
@@ -215,6 +215,22 @@ pub fn bytes(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
+pub fn string(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
+    let (len, len_size) = VarUInt32::decode(&buffer[vm.bp..])
+        .map_err(|e| packer_error!("while unpacking bytes len: {}", e))?;
+
+    vm.bp += len_size;
+    let raw = vmunpack!(vm, buffer, len.0 as usize);
+    vmsetio!(vm, Value::String(
+        String::from_utf8(raw.to_vec())
+            .map_err(|e| packer_error!("{}", e.to_string()))?
+    ));
+    vmstep!(vm);
+    vmlog!(vm, "bytes", "()");
+    Ok(())
+}
+
+#[inline(always)]
 pub fn bytes_raw(vm: &mut PackVM, len: u8, buffer: &[u8]) -> OpResult {
     let raw = vmunpack!(vm, buffer, len as usize);
     vmsetio!(vm, Value::Bytes(raw.to_vec()));
@@ -265,7 +281,7 @@ pub fn pushcnd(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
         1u8 => {
             let val = vmgetio!(vm);
             match val {
-                Value::Struct(_name, values) => {
+                Value::Struct(values) => {
                     values.insert("type".to_string(), Value::Uint32(cnd.0));
                 }
                 _ => return Err(packer_error!("expected struct to be target value but got: {}", val)),
@@ -320,6 +336,7 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
 
         Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
         Instruction::BytesRaw{ size } => { bytes_raw(vm, size, buffer)?; exec(vm, buffer) }
+        Instruction::String => { string(vm, buffer)?; exec(vm, buffer) }
 
         Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
         Instruction::Extension => { extension(vm, buffer)?; exec(vm, buffer) }

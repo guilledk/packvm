@@ -69,7 +69,7 @@ fn vmio<'a>(vm: &PackVM, io: &'a Value, nsp: &[NamespacePart]) -> Result<Option<
 
         // struct field access
         NamespacePart::StructField(name) => {
-            if let Value::Struct(_, fields) = io {
+            if let Value::Struct(fields) = io {
                 if let Some(val) = fields.get(name) {
                     vmio(vm, val, &nsp[1..])
                 } else {
@@ -235,6 +235,24 @@ pub fn bytes(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
 }
 
 #[inline(always)]
+pub fn string(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let val = vmgetio_expect!(vm, io, String);
+    match val {
+        Value::String(s) => {
+            let (size_raw, size_len) = VarUInt32(s.len() as u32).encode();
+            let mut array = Vec::with_capacity(size_len + s.len());
+            array.extend_from_slice(&size_raw[..size_len]);
+            array.extend_from_slice(s.as_bytes());
+            vmpack!(vm, buffer, array.as_slice());
+            vmstep!(vm);
+        }
+        _ => return type_mismatch!("String", val)
+    }
+    vmlog!(vm, "string", "()");
+    Ok(())
+}
+
+#[inline(always)]
 pub fn bytes_raw(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, len: u8) -> OpResult {
     let val = vmgetio_expect!(vm, io, BytesRaw);
     match val {
@@ -299,9 +317,9 @@ pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> 
             vm.ionsp.push(NamespacePart::ArrayIndex);
             values.len() as u32
         }
-        Value::Struct(name, fields) => {
+        Value::Struct(fields) => {
             let type_field = fields.get("type")
-                .ok_or(packer_error!("Cant find type field in enum struct {}: {:?}", name, fields))?;
+                .ok_or(packer_error!("Cant find type field in enum struct: {:?}", fields))?;
 
             match type_field {
                 Value::Uint32(cnd) => {
@@ -372,6 +390,7 @@ pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), Pac
 
         Instruction::Bytes => { bytes(vm, io, buffer)?; exec(vm, io, buffer) }
         Instruction::BytesRaw{ size } => { bytes_raw(vm, io, buffer, size)?; exec(vm, io, buffer) }
+        Instruction::String => { string(vm, io, buffer)?; exec(vm, io, buffer) }
 
         Instruction::Optional => { optional(vm, io, buffer)?; exec(vm, io, buffer) }
         Instruction::Extension => { extension(vm, io)?; exec(vm, io, buffer) }

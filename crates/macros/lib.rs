@@ -17,10 +17,9 @@ fn vm_name_attr(attrs: &[Attribute], default: &str) -> LitStr {
 }
 
 #[proc_macro_derive(VMStruct, attributes(vm_name))]
-pub fn stack_struct(input: TokenStream) -> TokenStream {
+pub fn vm_struct(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let struct_name = vm_name_attr(&input.attrs, &name.to_string());
 
     // collect fields in declaration order
     let fields = match &input.data {
@@ -53,7 +52,7 @@ pub fn stack_struct(input: TokenStream) -> TokenStream {
             fn as_io(&self) -> ::packvm::Value {
                 let mut map = ::std::collections::HashMap::<String, ::packvm::Value>::with_capacity(#field_count);
                 #( #inserts )*
-                ::packvm::Value::Struct(#struct_name.to_string(), map)
+                ::packvm::Value::Struct(map)
             }
         }
     }
@@ -61,10 +60,9 @@ pub fn stack_struct(input: TokenStream) -> TokenStream {
 }
 
 #[proc_macro_derive(VMEnum, attributes(vm_name))]
-pub fn stack_enum(input: TokenStream) -> TokenStream {
+pub fn vm_enum(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     let name = &input.ident;
-    let enum_name = vm_name_attr(&input.attrs, &name.to_string());
 
     let variants = match &input.data {
         Data::Enum(e) => &e.variants,
@@ -88,7 +86,7 @@ pub fn stack_enum(input: TokenStream) -> TokenStream {
 
                 // flatten payload if it is a struct, else keep under "value"
                 match ::packvm::IOValue::as_io(inner) {
-                    ::packvm::Value::Struct(_, fields) => {
+                    ::packvm::Value::Struct(fields) => {
                         map.extend(fields.into_iter());
                     }
                     other => {
@@ -96,7 +94,7 @@ pub fn stack_enum(input: TokenStream) -> TokenStream {
                     }
                 }
 
-                ::packvm::Value::Struct(#enum_name.to_string(), map)
+                ::packvm::Value::Struct(map)
             }
         }
     });
