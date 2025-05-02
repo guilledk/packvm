@@ -77,6 +77,12 @@ fn assemble_sections<
                         ptr: start_ptr + jptr
                     };
                 },
+                Instruction::JmpStructCND(cnd, jptr) => {
+                    executable[ptr] = Instruction::JmpStructCND(cnd, ptr + jptr);
+                }
+                Instruction::JmpArrayCND(_) => {
+                    executable[ptr] = Instruction::JmpArrayCND(ptr - 1);
+                }
                 Instruction::Field(rel_str_id) => {
                     let field_name = sec_program.strings.get(rel_str_id)
                         .ok_or(compiler_error!("Couldn't find str of field id: {}", &rel_str_id))?;

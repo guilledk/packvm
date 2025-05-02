@@ -17,8 +17,8 @@ use packvm::{
         compile_type,
         Program,
         SourceCode,
+        ProgramNamespace,
         antelope::AntelopeSourceCode,
-        assembly::Executable
     },
     compile_source,
     assemble
@@ -27,7 +27,7 @@ use packvm_macros::{VMStruct, VMEnum};
 
 const TESTABI: &str = include_str!("test_abi.json");
 
-/// Run `UnpackVM` for the ABI type, feed it the buffer,
+/// Run `PackVM` for the ABI type, feed it the buffer,
 /// and assert that the resulting stack equals `$expected`.
 macro_rules! pack_and_assert {
     ($type_name:expr, $value:expr, $expected:expr $(,)?) => {{
@@ -35,12 +35,11 @@ macro_rules! pack_and_assert {
         let mut program = Program::default();
         compile_type(&src, $type_name, &mut program).expect("failed to compile");
         program.code.push(Instruction::Exit);
-        let exec = Executable {
-            code: program.code.clone(),
-            str_map: bimap::BiHashMap::default(),
-        };
+        let mut ns = ProgramNamespace::from_source(&src);
+        ns.set_program(0, program);
+        let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(&exec);
-        let encoded = vm.run(0, &$value).expect("Pack failed");
+        let encoded = vm.run_pack(0, &$value).expect("Pack failed");
         assert_eq!(encoded, $expected);
     }};
 }
@@ -220,6 +219,6 @@ fn test_pack_struct() {
     let pid = src.program_id_for("test_struct").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(&code);
-    let encoded = vm.run(pid, &val).expect("Pack failed");
+    let encoded = vm.run_pack(pid, &val).expect("Pack failed");
     assert_eq!(encoded, enc.get_bytes());
 }

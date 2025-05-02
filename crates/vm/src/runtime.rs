@@ -36,10 +36,12 @@ impl Into<String> for &NamespacePart {
 
 pub struct PackVM<'a> {
     pub(crate) ip: usize,
+    pub(crate) bp: usize,  // only for unpack
 
-    pub(crate) cndstack: Vec<isize>,
+    pub(crate) cndstack: Vec<u32>,
     pub(crate) retstack: Vec<usize>,
 
+    pub(crate) io: Value,
     pub(crate) ionsp: Vec<NamespacePart>,
     pub(crate) executable: &'a Executable
 }
@@ -49,16 +51,19 @@ impl<'a> PackVM<'a> {
         debug_log!("Initialized VM with executable: \n{:?}", executable);
         PackVM {
             ip: 0,
+            bp: 0,
+
             cndstack: vec![0],
             retstack: vec![0],
 
+            io: Value::None,
             ionsp: vec![NamespacePart::Root],
 
             executable
         }
     }
 
-    pub fn run(
+    pub fn run_pack(
         &mut self,
         program: usize,
         io: &Value
@@ -73,43 +78,7 @@ impl<'a> PackVM<'a> {
         Ok(buffer)
     }
 
-    #[inline(always)]
-    pub fn nsp_last(&self) -> &NamespacePart {
-        let last = self.ionsp.len() - 1;
-        &self.ionsp[last]
-    }
-}
-
-pub struct UnpackVM<'a> {
-    pub(crate) ip: usize,
-    pub(crate) bp: usize,
-
-    pub(crate) cndstack: Vec<isize>,
-    pub(crate) retstack: Vec<usize>,
-
-    pub(crate) io: Value,
-    pub(crate) ionsp: Vec<NamespacePart>,
-    pub(crate) executable: &'a Executable
-}
-
-impl<'a> UnpackVM<'a> {
-    pub fn from_executable(executable: &'a Executable) -> Self {
-        debug_log!("Initialized VM with executable: \n{:?}", executable);
-        Self {
-            ip: 0,
-            bp: 0,
-
-            cndstack: vec![0],
-            retstack: vec![0],
-
-            io: Value::None,
-            ionsp: vec![NamespacePart::Root],
-
-            executable
-        }
-    }
-
-    pub fn run(
+    pub fn run_unpack(
         &mut self,
         program: usize,
         buffer: &[u8]
@@ -127,5 +96,17 @@ impl<'a> UnpackVM<'a> {
     pub fn nsp_last(&self) -> &NamespacePart {
         let last = self.ionsp.len() - 1;
         &self.ionsp[last]
+    }
+
+    #[inline(always)]
+    pub fn cnd(&self) -> u32 {
+        let last = self.cndstack.len() - 1;
+        self.cndstack[last]
+    }
+
+    #[inline(always)]
+    pub fn cnd_mut(&mut self) -> &mut u32 {
+        let last = self.cndstack.len() - 1;
+        &mut self.cndstack[last]
     }
 }

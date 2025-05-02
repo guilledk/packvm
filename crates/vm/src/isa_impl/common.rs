@@ -35,27 +35,21 @@ macro_rules! jmp {
 }
 
 #[macro_export]
-macro_rules! jmpcnd {
-    ($vm:ident, $ptrdelta:expr, $value:expr, $delta:expr) => {{
-        let csp = $vm.cndstack.len() - 1;
-        $vm.cndstack[csp] += $delta;
-        if $vm.cndstack[csp] == $value {
-            if $ptrdelta.is_negative() {
-                $vm.ip -= $ptrdelta.abs() as usize;
-            } else {
-                $vm.ip += $ptrdelta as usize;
-            }
+macro_rules! jmpscnd {
+    ($vm:ident, $variant:expr, $ptr:expr) => {{
+        if $vm.cnd() == $variant {
+            $vm.ip = $ptr;
             vmlog!(
                 $vm,
-                "jmpcnd",
-                "(t: {}, v: {}, d: {}) triggered", $ptrdelta, $value, $delta
+                "jmp struct cnd",
+                "({}, {}) triggered", $variant, $ptr
             );
         } else {
-            $vm.ip += 1;           // fall-through
+            $vm.ip += 1;
             vmlog!(
                 $vm,
-                "jmpcnd",
-                "(t: {}, v: {}, d: {})", $ptrdelta, $value, $delta
+                "jmp struct cnd",
+                "({}, {}) pass", $variant, $ptr
             );
         }
         Ok(())
@@ -63,27 +57,24 @@ macro_rules! jmpcnd {
 }
 
 #[macro_export]
-macro_rules! jmpnotcnd {
-    ($vm:ident, $ptrdelta:expr, $value:expr, $delta:expr) => {{
-        let csp = $vm.cndstack.len() - 1;
-        $vm.cndstack[csp] += $delta;
-        if $vm.cndstack[csp] != $value {
-            if $ptrdelta.is_negative() {
-                $vm.ip -= $ptrdelta.abs() as usize;
-            } else {
-                $vm.ip += $ptrdelta as usize;
-            }
+macro_rules! jmpacnd {
+    ($vm:ident, $ptr:expr) => {{
+        let cnd = $vm.cnd_mut();
+        *cnd -= 1;
+        let cnd = *cnd;
+        if cnd > 0 {
+            $vm.ip = $ptr;
             vmlog!(
                 $vm,
-                "jmpnotcnd",
-                "(t: {}, v: {}, d: {}) triggered", $ptrdelta, $value, $delta
+                "jmp array cnd",
+                "({}) ptr: {} triggered", cnd, $ptr
             );
         } else {
-            $vm.ip += 1;           // fall-through
+            $vm.ip += 1;
             vmlog!(
                 $vm,
-                "jmpnotcnd",
-                "(t: {}, v: {}, d: {})", $ptrdelta, $value, $delta
+                "jmp array cnd",
+                "({}) ptr: {} pass", cnd, $ptr
             );
         }
         Ok(())
@@ -108,7 +99,7 @@ macro_rules! jmpret {
 #[macro_export]
 macro_rules! section {
     ($vm:ident, $ctype:expr, $id:expr) => {{
-        let fname = $vm.executable.str_map.get_by_left($id)
+        let fname = $vm.executable.str_map.get_by_left(&$id)
             .ok_or(crate::packer_error!("Failed to resolve struct name from section id: {}", $id))?;
 
         $vm.ionsp.push(NamespacePart::StructNode($ctype, fname.clone()));
@@ -131,7 +122,7 @@ macro_rules! field {
             NamespacePart::StructField(_) => { $vm.ionsp.pop(); },
             _ => return Err(crate::packer_error!("Expected Struct on nsp last, but got {:?}", $vm.nsp_last())),
         }
-        let fname = $vm.executable.str_map.get_by_left($id)
+        let fname = $vm.executable.str_map.get_by_left(&$id)
             .ok_or(crate::packer_error!("Failed to resolve struct field name from id: {}", $id))?;
 
         $vm.ionsp.push(NamespacePart::StructField(fname.clone()));

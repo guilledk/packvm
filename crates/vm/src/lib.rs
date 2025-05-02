@@ -17,5 +17,4 @@ pub mod runtime;
 
 pub use runtime::{
     PackVM,
-    UnpackVM
 };

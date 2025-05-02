@@ -183,6 +183,10 @@ impl<
         }))
     }
 
+    pub fn set_program(&mut self, id: usize, program: Program) -> Option<Program> {
+        self.ns.insert(id, program)
+    }
+
     pub fn len(&self) -> usize {
         self.ns.len()
     }
@@ -357,11 +361,7 @@ fn compile_array<
 
     code.push(compile_type_ops(src, type_name, depth)?);
 
-    code.push(Instruction::JmpNotCND{
-        ptrdelta: -1,
-        value: 0,
-        delta: -1
-    });
+    code.push(Instruction::JmpArrayCND(0));  // ptr will be filled by assembler == final pos of instruction - 1
 
     code.push(Instruction::PopCND);
 
@@ -406,11 +406,7 @@ fn compile_enum<
 
     // variant index based jump table
     for (i, _var_name) in var_meta.variants().iter().enumerate() {
-        code.push(Instruction::JmpCND{
-            ptrdelta: (i + vars_count) as isize,
-            value: i as isize,
-            delta: 0
-        });
+        code.push(Instruction::JmpStructCND(i as u32, 3 + i));
     }
 
     // finally add each of the variant implementations code and their Jmp to post definition

@@ -1,5 +1,5 @@
 use tailcall::tailcall;
-use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, section, field};
+use crate::{exit, jmp, packer_error, popcnd, jmpret, section, field, jmpacnd, jmpscnd};
 use crate::{
     utils::{
         PackerError,
@@ -26,7 +26,7 @@ macro_rules! vmlog {
         println!(
             "ip({:4}) cnd({:4}) | {:80} | ionsp: {}",
             $vm.ip,
-            $vm.cndstack.last().unwrap_or(&-1),
+            $vm.cndstack.last().unwrap(),
             &format!("{}{}", $instr, format_args!($($args)*)),
             $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
         );
@@ -291,7 +291,7 @@ pub fn extension(vm: &mut PackVM, io: &Value) -> OpResult {
 }
 
 #[inline(always)]
-pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: &u8) -> OpResult {
+pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> OpResult {
     let val = vmgetio_expect!(vm, io, AnyPushCND);
     let cnd: u32 = match val {
         Value::Array(values) => {
@@ -323,7 +323,7 @@ pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: &u8) ->
         }
     };
 
-    vm.cndstack.push(cnd as isize);
+    vm.cndstack.push(cnd);
     let (size_raw, size_len) = VarUInt32(cnd).encode();
     vmpack!(vm, buffer, &size_raw[..size_len]);
     vmstep!(vm);
@@ -333,7 +333,7 @@ pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: &u8) ->
 
 #[tailcall]
 pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), PackerError> {
-    match &vm.executable.code[vm.ip] {
+    match vm.executable.code[vm.ip] {
         Instruction::Bool => { boolean(vm, io, buffer)?; exec(vm, io, buffer) }
 
         Instruction::UInt {size} => {
@@ -371,17 +371,17 @@ pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), Pac
         }
 
         Instruction::Bytes => { bytes(vm, io, buffer)?; exec(vm, io, buffer) }
-        Instruction::BytesRaw{ size } => { bytes_raw(vm, io, buffer, *size)?; exec(vm, io, buffer) }
+        Instruction::BytesRaw{ size } => { bytes_raw(vm, io, buffer, size)?; exec(vm, io, buffer) }
 
         Instruction::Optional => { optional(vm, io, buffer)?; exec(vm, io, buffer) }
         Instruction::Extension => { extension(vm, io)?; exec(vm, io, buffer) }
 
         Instruction::PushCND(ctype) => { pushcnd(vm, io, buffer, ctype)?; exec(vm, io, buffer) }
         Instruction::PopCND => { popcnd!(vm)?; exec(vm, io, buffer) }
-        Instruction::Jmp{ ptr} => { jmp!(vm, *ptr)?; exec(vm, io, buffer) }
-        Instruction::JmpRet{ptr} => { jmpret!(vm, *ptr); exec(vm, io, buffer) }
-        Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, io, buffer) }
-        Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, io, buffer) }
+        Instruction::Jmp{ ptr} => { jmp!(vm, ptr)?; exec(vm, io, buffer) }
+        Instruction::JmpRet{ptr} => { jmpret!(vm, ptr); exec(vm, io, buffer) }
+        Instruction::JmpArrayCND(ptr) => { jmpacnd!(vm, ptr)?; exec(vm, io, buffer) }
+        Instruction::JmpStructCND(variant, ptr) => { jmpscnd!(vm, variant, ptr)?; exec(vm, io, buffer) }
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())
@@ -389,7 +389,7 @@ pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), Pac
                 exec(vm, io, buffer)
             }
         }
-        Instruction::Section(ctype, name) => { section!(vm, *ctype, name); exec(vm, io, buffer) },
+        Instruction::Section(ctype, name) => { section!(vm, ctype, name); exec(vm, io, buffer) },
         Instruction::Field(name) => { field!(vm, name); exec(vm, io, buffer) },
     }
 }

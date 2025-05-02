@@ -310,15 +310,9 @@ pub enum Instruction {
 
     // conditional jumps based on first value on condition stack
 
-    // ptrdelta: ip delta to apply if top cnd stack == value
-    // value: condition value to check for
-    // delta: delta to apply to top cnd stack value if != value
-    JmpCND{ ptrdelta: isize, value: isize, delta: isize },
+    JmpStructCND(u32, usize),
 
-    // ptrdelta: ip delta to apply if top cnd stack != value
-    // value: condition value to check for
-    // delta: delta to apply to top cnd stack value if == value
-    JmpNotCND{ ptrdelta: isize, value: isize, delta: isize },  // ip delta to apply, condition value, cnd delta to apply
+    JmpArrayCND(usize),
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,

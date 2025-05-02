@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use tailcall::tailcall;
-use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, section, field};
+use crate::{exit, jmp, packer_error, popcnd, jmpret, section, field, jmpacnd, jmpscnd};
 use crate::{
     utils::{
         PackerError,
@@ -10,7 +10,7 @@ use crate::{
     isa_impl::common::OpResult,
     Value,
     Instruction,
-    UnpackVM
+    PackVM
 };
 
 #[cfg(feature = "debug")]
@@ -19,7 +19,7 @@ macro_rules! vmlog {
         println!(
             "ip({:4}) cnd({:4}) bp({:4}) | {:80} | ionsp: {}",
             $vm.ip,
-            $vm.cndstack.last().unwrap_or(&-1),
+            $vm.cndstack.last().unwrap(),
             $vm.bp,
             &format!("{}{}", $instr, format_args!($($args)*)),
             $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
@@ -115,7 +115,7 @@ macro_rules! vmunpack {
 macro_rules! impl_unpack_op {
     ($( ($fname:ident, $ty:ident, $variant:ident, $dbg:literal) ),* $(,)?) => {$(
         #[inline(always)]
-        pub fn $fname(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+        pub fn $fname(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
             let buf = vmunpack!(vm, buffer, size_of::<$ty>());
             let num = $ty::from_le_bytes(
                 buf.try_into()
@@ -147,7 +147,7 @@ impl_unpack_op!(
 );
 
 #[inline(always)]
-pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
+pub fn boolean(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
     let b = match buffer[vm.bp] {
         0u8 => false,
         1u8 => true,
@@ -167,7 +167,7 @@ pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
 }
 
 #[inline(always)]
-pub fn varuint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn varuint32(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
     let (varint, val_size) = VarUInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("{}", e))?;
     vmsetio!(vm, Value::VarUInt32(varint.0));
@@ -178,7 +178,7 @@ pub fn varuint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn varint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn varint32(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
     let (val, val_size) = VarInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("{}", e))?;
     vmsetio!(vm, Value::VarInt32(val.0));
@@ -189,7 +189,7 @@ pub fn varint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn float128(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn float128(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
     let float_raw: [u8; 16] = vmunpack!(vm, buffer, 16)
         .try_into()
         .map_err(|e| packer_error!("{}", e))?;
@@ -202,7 +202,7 @@ pub fn float128(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn bytes(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn bytes(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
     let (len, len_size) = VarUInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("while unpacking bytes len: {}", e))?;
 
@@ -215,7 +215,7 @@ pub fn bytes(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn bytes_raw(vm: &mut UnpackVM, len: u8, buffer: &[u8]) -> OpResult {
+pub fn bytes_raw(vm: &mut PackVM, len: u8, buffer: &[u8]) -> OpResult {
     let raw = vmunpack!(vm, buffer, len as usize);
     vmsetio!(vm, Value::Bytes(raw.to_vec()));
     vmstep!(vm);
@@ -224,7 +224,7 @@ pub fn bytes_raw(vm: &mut UnpackVM, len: u8, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn optional(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn optional(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
     if buffer[vm.bp] == 1 {
         vm.ip += 1;
         vmlog!(vm, "optional some", "()");
@@ -238,7 +238,7 @@ pub fn optional(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn extension(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn extension(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
     if vm.bp == buffer.len() {
         vmsetio!(vm, Value::None);
         vm.ip += 2;
@@ -251,12 +251,11 @@ pub fn extension(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn pushcnd(vm: &mut UnpackVM, buffer: &[u8], ctype: &u8) -> OpResult {
+pub fn pushcnd(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
     let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
     vm.bp += cnd_size;
-    let cnd = cnd.0 as isize;
-    vm.cndstack.push(cnd);
+    vm.cndstack.push(cnd.0);
 
     match ctype {
         0u8 => {
@@ -267,7 +266,7 @@ pub fn pushcnd(vm: &mut UnpackVM, buffer: &[u8], ctype: &u8) -> OpResult {
             let val = vmgetio!(vm);
             match val {
                 Value::Struct(_name, values) => {
-                    values.insert("type".to_string(), Value::Uint32(cnd as u32));
+                    values.insert("type".to_string(), Value::Uint32(cnd.0));
                 }
                 _ => return Err(packer_error!("expected struct to be target value but got: {}", val)),
             }
@@ -281,8 +280,8 @@ pub fn pushcnd(vm: &mut UnpackVM, buffer: &[u8], ctype: &u8) -> OpResult {
 }
 
 #[tailcall]
-pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
-    match &vm.executable.code[vm.ip] {
+pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
+    match vm.executable.code[vm.ip] {
         Instruction::Bool => { boolean(vm, buffer).map_err(|e| packer_error!("{}\nVM state: {:?}", e.to_string(), vm.ionsp))?; exec(vm, buffer) }
 
         Instruction::UInt{ size} => {
@@ -320,17 +319,17 @@ pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
         }
 
         Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
-        Instruction::BytesRaw{ size } => { bytes_raw(vm, *size, buffer)?; exec(vm, buffer) }
+        Instruction::BytesRaw{ size } => { bytes_raw(vm, size, buffer)?; exec(vm, buffer) }
 
         Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
         Instruction::Extension => { extension(vm, buffer)?; exec(vm, buffer) }
 
         Instruction::PushCND(ctype) => { pushcnd(vm, buffer, ctype)?; exec(vm, buffer) }
         Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
-        Instruction::Jmp{ ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
-        Instruction::JmpRet{ptr} => { jmpret!(vm, *ptr); exec(vm, buffer) }
-        Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
-        Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
+        Instruction::Jmp{ ptr} => { jmp!(vm, ptr)?; exec(vm, buffer) }
+        Instruction::JmpRet{ptr} => { jmpret!(vm, ptr); exec(vm, buffer) }
+        Instruction::JmpArrayCND(ptr) => { jmpacnd!(vm, ptr)?; exec(vm, buffer) }
+        Instruction::JmpStructCND(variant, ptr) => { jmpscnd!(vm, variant, ptr)?; exec(vm, buffer) }
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())
@@ -338,7 +337,7 @@ pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
                 exec(vm, buffer)
             }
         }
-        Instruction::Section(ctype, name) => { section!(vm, *ctype, name); exec(vm, buffer) },
+        Instruction::Section(ctype, name) => { section!(vm, ctype, name); exec(vm, buffer) },
         Instruction::Field(name) => { field!(vm, name); exec(vm, buffer) },
     }
 }
