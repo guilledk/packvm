@@ -85,10 +85,9 @@ pub enum Value {
     Float128([u8; 16]),
 
     Bytes(Vec<u8>),
-    Condition(isize),
 
-    Struct(String),
-    EndStruct
+    Array(Vec<Value>),
+    Struct(String, Vec<(String, Value)>),
 }
 
 
@@ -140,11 +139,12 @@ macro_rules! value_payload_size {
                 len_prefix_size + len
             },
 
-            Value::Condition(v) => {
-                if *v < 0x80 { 1 }
-                else if *v < 0x4000 { 2 }
-                else if *v < 0x200000 { 3 }
-                else if *v < 0x10000000 { 4 }
+            Value::Array(v) => {
+                let v = v.len() as u32;
+                if v < 0x80 { 1 }
+                else if v < 0x4000 { 2 }
+                else if v < 0x200000 { 3 }
+                else if v < 0x10000000 { 4 }
                 else { 5 }
             }
 
@@ -225,12 +225,6 @@ impl From<[u8; 16]> for Value {
     }
 }
 
-impl From<isize> for Value {
-    fn from(value: isize) -> Self {
-        Value::Condition(value)
-    }
-}
-
 impl<T> From<Option<T>> for Value where T: Into<Value> {
     fn from(value: Option<T>) -> Self {
         if let Some(v) = value {
@@ -268,10 +262,9 @@ impl fmt::Display for Value {
 
             Value::Bytes(vec) => write!(f, "Bytes({:02x?})", vec),
 
-            Value::Condition(v) => write!(f, "Condition({})", v),
 
-            Value::Struct(name) => write!(f, "Struct({})", name),
-            Value::EndStruct => write!(f, "EndStruct"),
+            Value::Array(vals) => write!(f, "Array({:?})", vals),
+            Value::Struct(name, fields) => write!(f, "Struct({}, {:?})", name, fields),
         }
     }
 }
@@ -294,7 +287,7 @@ pub enum Instruction {
     Extension,
 
     // push condition from io stack into condition stack
-    PushCND,
+    PushCND(u8),
     // discard condition from stack
     PopCND,
 
@@ -407,27 +400,27 @@ macro_rules! instruction_for {
 }
 
 // traits for things that can be part of an IO stack
-pub trait IOStackValue {
-    fn push_to_stack(&self, stack: &mut Vec<Value>);
+pub trait IOValue {
+    fn as_io(&self) -> Value;
 }
 
-macro_rules! impl_io_stack_value {
+macro_rules! impl_io_value {
     ($( $src:ty ),* $(,)?) => {
-        $(impl IOStackValue for $src {
-            fn push_to_stack(&self, stack: &mut Vec<Value>) {
-                stack.push(self.into())
+        $(impl IOValue for $src {
+            fn as_io(&self) -> Value {
+                self.into()
             }
         })*
 
-        $(impl IOStackValue for &$src {
-            fn push_to_stack(&self, stack: &mut Vec<Value>) {
-                stack.push(Value::from(*self).into())
+        $(impl IOValue for &$src {
+            fn as_io(&self) -> Value {
+                (*self).into()
             }
         })*
     };
 }
 
-impl_io_stack_value!(
+impl_io_value!(
     bool,
     u8,
     u16,
@@ -444,62 +437,55 @@ impl_io_stack_value!(
 );
 
 
-impl IOStackValue for Vec<u8> {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
-        out.push(Value::Bytes(self.clone()));
+impl IOValue for Vec<u8> {
+    fn as_io(&self) -> Value {
+        Value::Bytes(self.clone())
     }
 }
 
-impl IOStackValue for Vec<String> {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
-        out.push(Value::Condition(self.len() as isize));
+impl IOValue for Vec<String> {
+    fn as_io(&self) -> Value {
+        let mut val = Vec::new();
         self.iter()
             .map(|s| s.clone().into_bytes().into())
-            .for_each(|raw| out.push(Value::Bytes(raw)));
+            .for_each(|raw| val.push(Value::Bytes(raw)));
+
+        Value::Array(val)
     }
 }
 
-impl IOStackValue for Option<Vec<u8>> {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
+impl IOValue for Option<Vec<u8>> {
+    fn as_io(&self) -> Value {
         match self {
-            Some(v) => v.push_to_stack(out),
-            None    => out.push(Value::None),
+            Some(v) => v.as_io(),
+            None    => Value::None,
         }
     }
 }
 
-impl IOStackValue for Option<String> {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
+impl IOValue for Option<String> {
+    fn as_io(&self) -> Value {
         match self {
-            Some(v) => v.push_to_stack(out),
-            None    => out.push(Value::None),
+            Some(v) => v.as_io(),
+            None    => Value::None,
         }
     }
 }
 
-impl IOStackValue for Option<u128> {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
+impl IOValue for Option<u128> {
+    fn as_io(&self) -> Value {
         match self {
-            Some(v) => v.push_to_stack(out),
-            None    => out.push(Value::None),
+            Some(v) => v.as_io(),
+            None    => Value::None,
         }
     }
 }
 
-default impl<T: IOStackValue> IOStackValue for Option<T> {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
+default impl<T: IOValue> IOValue for Option<T> {
+    fn as_io(&self) -> Value {
         match self {
-            Some(v) => v.push_to_stack(out),
-            None    => out.push(Value::None),
+            Some(v) => v.as_io(),
+            None    => Value::None,
         }
     }
 }
-
-pub trait IntoIOStack: IOStackValue {
-    fn to_stack(&self) -> Vec<Value> {
-        let mut v = Vec::new();
-        self.push_to_stack(&mut v);
-        v
-    }
-}
-impl<T: IOStackValue + ?Sized> IntoIOStack for T {}

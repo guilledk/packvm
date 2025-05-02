@@ -2,93 +2,98 @@ use serde::Serialize;
 use serde_json::from_str;
 use antelope::{
     chain::{
-        abi::{ShipABI, ABI},
+        abi::{ABI},
         binary_extension::BinaryExtension,
     },
     serializer::{Encoder, Decoder, Packer, PackerError},
     EnumPacker, StructPacker
 };
-use packvm::{UnpackVM, Value, IOStackValue, IntoIOStack, compiler::{
+use packvm::{UnpackVM, Value, IOValue, compiler::{
     antelope::AntelopeSourceCode,
-    compile_program
-}, compile_or_panic, compile, Instruction};
-use packvm::compiler::{compile_type_ops, Program};
+}, Instruction, compile_source, assemble};
+use packvm::compiler::{compile_type, Program};
 use packvm_macros::{StackStruct, StackEnum};
 
-const STDABI: &str = include_str!("std_abi.json");
 const TESTABI: &str = include_str!("test_abi.json");
 
 /// Run `UnpackVM` for the ABI type, feed it the buffer,
 /// and assert that the resulting stack equals `$expected`.
 macro_rules! unpack_and_assert {
     ($type_name:expr, $bytes:expr, $expected:expr $(,)?) => {{
-        let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
-        let abi_str = AntelopeSourceCode::try_from(abi).expect("failed to unwrap into source");
-        let mut program = Program {
-            id: 0,
-            name: $type_name.to_string(),
-            code: vec![compile_type_ops(&abi_str, $type_name).expect("failed to compile")],
-            deps: Vec::new(),
-            base_size: 0
-        };
+        let src = AntelopeSourceCode::default();
+        let mut program = Program::default();
+        compile_type(&src, $type_name, &mut program).expect("failed to compile");
         program.code.push(Instruction::Exit);
-        let decoded = UnpackVM::run(&program, $bytes).expect("Unpack failed");
+        let decoded = UnpackVM::run(0, program.code.as_slice(), $bytes).expect("Unpack failed");
         assert_eq!(decoded, $expected);
     }};
 }
 
 #[test]
 fn test_unpack_bool() {
-    unpack_and_assert!("bool", &[1u8],  &[Value::Bool(true)]);
-    unpack_and_assert!("bool", &[0u8],  &[Value::Bool(false)]);
+    unpack_and_assert!("bool", &[1u8],  Value::Bool(true));
+    unpack_and_assert!("bool", &[0u8],  Value::Bool(false));
 }
 
 #[test]
 fn test_unpack_uints() {
-    unpack_and_assert!("uint8",   &[0x12],                                   &[Value::Uint8(0x12)]);
-    unpack_and_assert!("uint16",  &[0x34, 0x12],                             &[Value::Uint16(0x1234)]);
-    unpack_and_assert!("uint32",  &[0x78, 0x56, 0x34, 0x12],                 &[Value::Uint32(0x12345678)]);
-    unpack_and_assert!("uint64",  &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12],
-                                      &[Value::Uint64(0x1234567890abcdef)]);
-    unpack_and_assert!("uint128", &0x112233445566778899aabbccddeeff00u128.to_le_bytes(),
-                                      &[Value::Uint128(0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00)]);
+    unpack_and_assert!("uint8",   &[0x12],                                   Value::Uint8(0x12));
+    unpack_and_assert!("uint16",  &[0x34, 0x12],                             Value::Uint16(0x1234));
+    unpack_and_assert!("uint32",  &[0x78, 0x56, 0x34, 0x12],                 Value::Uint32(0x12345678));
+    unpack_and_assert!(
+        "uint64",
+        &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12],
+        Value::Uint64(0x1234567890abcdef)
+    );
+    unpack_and_assert!(
+        "uint128",
+        &0x112233445566778899aabbccddeeff00u128.to_le_bytes(),
+        Value::Uint128(0x1122_3344_5566_7788_99aa_bbcc_ddee_ff00)
+    );
 }
 
 #[test]
 fn test_unpack_ints() {
-    unpack_and_assert!("int8",   &[0xff],                                         &[Value::Int8(-1)]);
-    unpack_and_assert!("int16",  &[0xfe, 0xff],                                   &[Value::Int16(-2)]);
-    unpack_and_assert!("int32",  &[0xfd, 0xff, 0xff, 0xff],                       &[Value::Int32(-3)]);
-    unpack_and_assert!("int64",  &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
-                                     &[Value::Int64(-4)]);
-    unpack_and_assert!("int128", &(-5i128).to_le_bytes(),                         &[Value::Int128(-5)]);
+    unpack_and_assert!("int8",   &[0xff],                                         Value::Int8(-1));
+    unpack_and_assert!("int16",  &[0xfe, 0xff],                                   Value::Int16(-2));
+    unpack_and_assert!("int32",  &[0xfd, 0xff, 0xff, 0xff],                       Value::Int32(-3));
+    unpack_and_assert!(
+        "int64",
+        &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
+        Value::Int64(-4)
+    );
+    unpack_and_assert!(
+        "int128",
+        &(-5i128).to_le_bytes(),
+        Value::Int128(-5)
+    );
 }
 
 #[test]
 fn test_unpack_varuint32() {
-    unpack_and_assert!("varuint32", &[0x7F],        &[Value::VarUInt32(0x7F)]);
-    unpack_and_assert!("varuint32", &[0x80, 0x01],  &[Value::VarUInt32(0x80)]);
+    unpack_and_assert!("varuint32", &[0x7F],        Value::VarUInt32(0x7F));
+    unpack_and_assert!("varuint32", &[0x80, 0x01],  Value::VarUInt32(0x80));
 }
 
 #[test]
 fn test_unpack_floats() {
-    unpack_and_assert!("float32", &1.0f32.to_le_bytes(), &[Value::Float32(1.0)]);
-    unpack_and_assert!("float64", &2.0f64.to_le_bytes(), &[Value::Float64(2.0)]);
-    unpack_and_assert!("float128", &[1u8; 16],           &[Value::Float128([1u8; 16])]);
+    unpack_and_assert!("float32", &1.0f32.to_le_bytes(), Value::Float32(1.0));
+    unpack_and_assert!("float64", &2.0f64.to_le_bytes(), Value::Float64(2.0));
+    unpack_and_assert!("float128", &[1u8; 16],           Value::Float128([1u8; 16]));
 }
 
 #[test]
 fn test_unpack_bytes() {
     let mut enc = Encoder::new(0);
     vec![1u8, 2u8, 3u8].pack(&mut enc);
-    unpack_and_assert!("bytes", enc.get_bytes(), &[Value::Bytes(vec![1, 2, 3])]);
+    unpack_and_assert!("bytes", enc.get_bytes(), Value::Bytes(vec![1, 2, 3]));
 }
 
 #[test]
 fn test_unpack_string() {
     let mut enc = Encoder::new(0);
     "abc".to_string().pack(&mut enc);
-    unpack_and_assert!("string", enc.get_bytes(), &[Value::Bytes(vec![b'a', b'b', b'c'])]);
+    unpack_and_assert!("string", enc.get_bytes(), Value::Bytes(vec![b'a', b'b', b'c']));
 }
 
 #[test]
@@ -99,7 +104,7 @@ fn test_unpack_array() {
     unpack_and_assert!(
         "uint32[]",
         enc.get_bytes(),
-        &[Value::Condition(2), Value::Uint32(1), Value::Uint32(2)],
+        Value::Array(vec![Value::Uint32(1), Value::Uint32(2)]),
     );
 }
 
@@ -107,24 +112,24 @@ fn test_unpack_array() {
 fn test_unpack_option() {
     let mut enc = Encoder::new(0);
     Some(1u32).pack(&mut enc);
-    unpack_and_assert!("uint32?", enc.get_bytes(), &[Value::Uint32(1)]);
+    unpack_and_assert!("uint32?", enc.get_bytes(), Value::Uint32(1));
 
     let mut enc = Encoder::new(0);
     None::<u32>.pack(&mut enc);
-    unpack_and_assert!("uint32?", enc.get_bytes(), &[Value::None]);
+    unpack_and_assert!("uint32?", enc.get_bytes(), Value::None);
 }
 
 #[test]
 fn test_unpack_extension() {
     let mut enc = Encoder::new(0);
     BinaryExtension::new(Some(1u32)).pack(&mut enc);
-    unpack_and_assert!("uint32$", enc.get_bytes(), &[Value::Uint32(1)]);
+    unpack_and_assert!("uint32$", enc.get_bytes(), Value::Uint32(1));
 
     let mut enc = Encoder::new(0);
     BinaryExtension::<u32>::new(None).pack(&mut enc);
-    unpack_and_assert!("uint32$", enc.get_bytes(), &[Value::None]);
+    unpack_and_assert!("uint32$", enc.get_bytes(), Value::None);
 
-    unpack_and_assert!("uint32$", &[], &[Value::None]);
+    unpack_and_assert!("uint32$", &[], Value::None);
 }
 
 #[test]
@@ -187,12 +192,17 @@ fn test_unpack_struct() {
     };
     test.pack(&mut enc);
 
-    let expected: Vec<Value> = test.to_stack();
+    let expected: Value = test.as_io();
+
+    println!("{:#?}", expected);
 
     let abi: ABI = from_str(TESTABI).expect("failed to parse ABI JSON");
-    let abi_src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
-    let program = compile!(&abi_src, "test_struct");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
 
-    let decoded = UnpackVM::run(&program, enc.get_bytes()).expect("Unpack failed");
+    let program = ns.get_program("test_struct").expect("failed to get program");
+
+    let decoded = UnpackVM::run(program.id, &code, enc.get_bytes()).expect("Unpack failed");
     assert_eq!(decoded, expected);
 }

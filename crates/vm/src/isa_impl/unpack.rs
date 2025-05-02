@@ -10,18 +10,18 @@ use crate::{
     Instruction,
     UnpackVM
 };
+use crate::runtime::NamespacePart;
 
 #[cfg(feature = "debug")]
 macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
-            "ip({:4}) sp({:4}) csp({:4}) cnd({:4}) | {:80} | s: {:?}",
+            "ip({:4}) csp({:4}) cnd({:4}) | {:80} | ionsp: {}",
             $vm.ip,
-            $vm.iostack.len(),
-            $vm.csp,
+            $vm.cndstack.len() - 1,
             $vm.cndstack.last().unwrap_or(&-1),
             &format!("{}{}", $instr, format_args!($($args)*)),
-            $vm.iostack.last(),
+            $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
         );
     }};
 }
@@ -32,9 +32,74 @@ macro_rules! vmlog {
 }
 
 macro_rules! vmstep {
-    ($vm:ident) => {
+    ($vm:ident) => {{
         $vm.ip += 1;
-    };
+
+        // match $vm.ionsp.last().unwrap() {
+
+        // }
+    }};
+}
+
+/// Walk `io` following `nsp`, materialising intermediate containers
+/// (`Value::Array` / `Value::Struct`) when they don’t exist yet, and
+/// return a *mutable* reference to the final slot.
+#[inline(always)]
+fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
+    // out-of recursion: nothing left to consume → return the current slot
+    if nsp.is_empty() {
+        return io;
+    }
+
+    match &nsp[0] {
+        // ──────────────────────────────────────────────── Root ────────────
+        NamespacePart::Root => vmiomut(io, &nsp[1..]),
+
+        // ─────────────────────────────────────── Array navigation ─────────
+        NamespacePart::ArrayIndex => {
+            if let Value::Array(ref mut arr) = io {
+                let idx = arr.len();
+                arr.push(Value::None);
+                vmiomut(&mut arr[idx], &nsp[1..])
+            } else {
+                panic!("expected Value::Array at {:?}, io: {:#?}", nsp, io);
+            }
+        }
+
+        // ─────────────────────────────────────── Struct navigation ────────
+        NamespacePart::StructField => {
+            if let Value::Struct(_, ref mut fields) = io {
+                let idx = fields.len();
+                fields.push(("".to_string(), Value::None));
+                let (_, val) = &mut fields[idx];
+                vmiomut(val, &nsp[1..])
+            } else {
+                panic!("expected Value::Struct at {:?} io: {:?}", nsp, io);
+            }
+        }
+
+        NamespacePart::ArrayNode => {
+            if let Value::None = io {
+                *io = Value::Array(Vec::new());
+            }
+            vmiomut(io, &nsp[1..])
+        }
+
+        NamespacePart::StructNode(ctype) => {
+            if let Value::None = io {
+                *io = Value::Struct(ctype.to_string(), Vec::new());
+            }
+            vmiomut(io, &nsp[1..])
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! vmsetio {
+    ($vm:expr, $val:expr) => {{
+        let slot = vmiomut(&mut $vm.io, &$vm.ionsp);
+        *slot = $val;
+    }};
 }
 
 macro_rules! vmunpack {
@@ -50,13 +115,11 @@ macro_rules! impl_unpack_op {
         #[inline(always)]
         pub fn $fname(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
             let buf = vmunpack!(vm, buffer, size_of::<$ty>());
-            let val = $ty::from_le_bytes(
+            let num = $ty::from_le_bytes(
                 buf.try_into()
                     .map_err(|e| packer_error!("while unpacking {}: {}", stringify!($ty), e))?,
             );
-
-            vm.iostack.push(Value::$variant(val));
-
+            vmsetio!(vm, Value::$variant(num));
             vmstep!(vm);
             vmlog!(vm, $dbg, "()");
             Ok(())
@@ -83,12 +146,12 @@ impl_unpack_op!(
 
 #[inline(always)]
 pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
-    let val = match buffer[vm.bp] {
+    let b = match buffer[vm.bp] {
         0u8 => false,
         1u8 => true,
         _ => unreachable!()
     };
-    vm.iostack.push(Value::Bool(val));
+    vmsetio!(vm, Value::Bool(b));
     vm.bp += 1;
     vmstep!(vm);
     vmlog!(vm, "bool", "()");
@@ -97,9 +160,9 @@ pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 
 #[inline(always)]
 pub fn varuint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
-    let (val, val_size) = VarUInt32::decode(&buffer[vm.bp..])
+    let (varint, val_size) = VarUInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("{}", e))?;
-    vm.iostack.push(Value::VarUInt32(val.0));
+    vmsetio!(vm, Value::VarUInt32(varint.0));
     vm.bp += val_size;
     vmstep!(vm);
     vmlog!(vm, "varuint32", "()");
@@ -110,7 +173,7 @@ pub fn varuint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 pub fn varint32(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     let (val, val_size) = VarInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("{}", e))?;
-    vm.iostack.push(Value::VarInt32(val.0));
+    vmsetio!(vm, Value::VarInt32(val.0));
     vm.bp += val_size;
     vmstep!(vm);
     vmlog!(vm, "varint32", "()");
@@ -123,7 +186,7 @@ pub fn float128(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
         .try_into()
         .map_err(|e| packer_error!("{}", e))?;
 
-    vm.iostack.push(Value::Float128(float_raw));
+    vmsetio!(vm, Value::Float128(float_raw));
     vm.bp += 16;
     vmstep!(vm);
     vmlog!(vm, "float128", "()");
@@ -137,7 +200,7 @@ pub fn bytes(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 
     vm.bp += len_size;
     let raw = vmunpack!(vm, buffer, len.0 as usize);
-    vm.iostack.push(Value::Bytes(raw.to_vec()));
+    vmsetio!(vm, Value::Bytes(raw.to_vec()));
     vmstep!(vm);
     vmlog!(vm, "bytes", "()");
     Ok(())
@@ -146,7 +209,7 @@ pub fn bytes(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 #[inline(always)]
 pub fn bytes_raw(vm: &mut UnpackVM, len: u8, buffer: &[u8]) -> OpResult {
     let raw = vmunpack!(vm, buffer, len as usize);
-    vm.iostack.push(Value::Bytes(raw.to_vec()));
+    vmsetio!(vm, Value::Bytes(raw.to_vec()));
     vmstep!(vm);
     vmlog!(vm, "bytes_raw", "({})", len);
     Ok(())
@@ -158,7 +221,7 @@ pub fn optional(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
         vm.ip += 1;
         vmlog!(vm, "optional some", "()");
     } else {
-        vm.iostack.push(Value::None);
+        vmsetio!(vm, Value::None);
         vm.ip += 2;
         vmlog!(vm, "optional none", "()");
     }
@@ -169,7 +232,7 @@ pub fn optional(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 #[inline(always)]
 pub fn extension(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
     if vm.bp == buffer.len() {
-        vm.iostack.push(Value::None);
+        vmsetio!(vm, Value::None);
         vm.ip += 2;
         vmlog!(vm, "extension stack empty", "()");
     } else {
@@ -180,24 +243,44 @@ pub fn extension(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn pushcnd(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
-    let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
-        .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
+pub fn pushcnd(vm: &mut UnpackVM, ctype: u8, buffer: &[u8]) -> OpResult {
+    match ctype {
+        0 => {
+            let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
+                .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
+            vm.bp += cnd_size;
+            let cnd = cnd.0 as isize;
+            vm.cndstack.push(cnd);
+            // vm.csp += 1;
+            vm.ionsp.push(NamespacePart::ArrayNode);
+            vm.ionsp.push(NamespacePart::ArrayIndex);
+        },
+        1 => {
+            let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
+                .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
+            vm.bp += cnd_size;
+            let cnd = cnd.0 as isize;
+            vm.cndstack.push(cnd);
+            // vm.csp += 1;
+            vm.ionsp.push(NamespacePart::StructNode(ctype));
+            vm.ionsp.push(NamespacePart::StructField);
+        },
+        2 => {
+            vm.ionsp.push(NamespacePart::StructNode(ctype));
+            vm.ionsp.push(NamespacePart::StructField);
+        }
+        _ => (),
+    }
 
-    vm.bp += cnd_size;
-    let cnd = cnd.0 as isize;
-    vm.iostack.push(Value::Condition(cnd));
-    vm.cndstack.push(cnd);
-    vm.csp += 1;
     vmstep!(vm);
-    vmlog!(vm, "pushcnd", "io -> ({})", cnd);
+    vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cndstack.last().unwrap());
     Ok(())
 }
 
 #[tailcall]
 #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
 pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
-    match &vm.program.code[vm.ip] {
+    match &vm.code[vm.ip] {
         Instruction::Bool => { boolean(vm, buffer)?; exec(vm, buffer) }
 
         Instruction::UInt{ size} => {
@@ -240,7 +323,7 @@ pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
         Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
         Instruction::Extension => { extension(vm, buffer)?; exec(vm, buffer) }
 
-        Instruction::PushCND => { pushcnd(vm, buffer)?; exec(vm, buffer) }
+        Instruction::PushCND(ctype) => { pushcnd(vm, *ctype, buffer)?; exec(vm, buffer) }
         Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
         Instruction::Jmp{ info: _, ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
         Instruction::JmpRet{info, ptr} => { jmpret!(vm, *info, *ptr); exec(vm, buffer) }

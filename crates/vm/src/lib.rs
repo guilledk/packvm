@@ -6,8 +6,7 @@ pub use isa::{
     Value,
     Instruction,
     Exception,
-    IOStackValue,
-    IntoIOStack
+    IOValue,
 };
 
 mod isa_impl;

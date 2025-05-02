@@ -93,9 +93,12 @@ pub trait SourceCode<
     fn is_std_type(&self, ty: &str) -> bool;
     fn is_alias_of(&self, alias: &str, ty: &str) -> bool;
 
+    fn is_variant(&self, ty: &str) -> bool;
+
     fn is_variant_of(&self, ty: &str, var: &str) -> bool;
 }
 
+#[derive(Default)]
 pub struct Program {
     pub id: u64,
     pub name: String,
@@ -255,7 +258,7 @@ fn compile_extension<
         "\t".repeat(depth),
         type_name
     );
-    code.push(Instruction::Optional);
+    code.push(Instruction::Extension);
     code.push(compile_type_ops(src, type_name, depth)?);
     Ok(code)
 }
@@ -278,7 +281,7 @@ fn compile_array<
         type_name
     );
 
-    code.push(Instruction::PushCND);
+    code.push(Instruction::PushCND(0));
 
     code.push(compile_type_ops(src, type_name, depth)?);
 
@@ -315,7 +318,7 @@ fn compile_enum<
     let variants = var_meta.variants();
 
     if variants.len() == 1 {
-        code.push(Instruction::PushCND);
+        code.push(Instruction::PushCND(1));
         code.push(compile_type_ops(src, &variants[0], depth)?);
         code.push(Instruction::PopCND);
         return Ok(code)
@@ -327,7 +330,7 @@ fn compile_enum<
 
     // finally build variant definition full code
     // set condition to the length of the array from the stack
-    code.push(Instruction::PushCND);
+    code.push(Instruction::PushCND(1));
 
     // variant index based jump table
     for (i, _var_name) in var_meta.variants().iter().enumerate() {
@@ -450,10 +453,6 @@ pub fn compile_type<
             match instruction_for!(field.type_name()) {
                 Some(op) => program.code.push(op),
                 None => {
-                    // program.code.push(Instruction::ProgramJmp {
-                    //     name: field.type_name().to_string(),
-                    //     ptr: 0, ret: 0
-                    // });
                     compile_type(src, &field.type_name(), program)?;
                 },
             }
@@ -493,6 +492,10 @@ pub fn compile_program<
             program_name, e.to_string())
         )?;
 
+    if !src.is_variant(&program_name) {
+        program.code.insert(0, Instruction::PushCND(2));
+    }
+
     // gather dependencies
     for op in program.code.iter() {
         match op {
@@ -505,6 +508,9 @@ pub fn compile_program<
         }
     }
 
+    if !src.is_variant(&program_name) {
+        program.code.push(Instruction::PopCND);
+    }
     program.code.push(Instruction::Exit);
     program.base_size = program.code.iter()
         .map(|op| payload_base_size_of(op))

@@ -1,13 +1,16 @@
 use crate::utils::PackerError;
 
-pub type OpResult = Result<(), PackerError>;
+pub(crate) type OpResult = Result<(), PackerError>;
 
 #[macro_export]
 macro_rules! popcnd {
     ($vm:ident) => {{
-        $vm.cndstack.pop();
-        $vm.csp -= 1;
+        if $vm.cndstack.len() > 1 {
+            $vm.cndstack.pop();
+        }
         $vm.ip += 1;
+        $vm.ionsp.pop();
+        $vm.ionsp.pop();
         vmlog!($vm, "popcnd", "()");
         Ok(())
     }};
@@ -16,7 +19,7 @@ macro_rules! popcnd {
 #[macro_export]
 macro_rules! jmp {
     ($vm:ident, $ptr:expr) => {{
-        $vm.ip += $ptr;
+        $vm.ip = $ptr;
         vmlog!($vm, "jmp", "({})", $ptr);
         Ok(())
     }};
@@ -25,8 +28,9 @@ macro_rules! jmp {
 #[macro_export]
 macro_rules! jmpcnd {
     ($vm:ident, $ptrdelta:expr, $value:expr, $delta:expr) => {{
-        $vm.cndstack[$vm.csp] += $delta;
-        if $vm.cndstack[$vm.csp] == $value {
+        let csp = $vm.cndstack.len() - 1;
+        $vm.cndstack[csp] += $delta;
+        if $vm.cndstack[csp] == $value {
             if $ptrdelta.is_negative() {
                 $vm.ip -= $ptrdelta.abs() as usize;
             } else {
@@ -52,8 +56,9 @@ macro_rules! jmpcnd {
 #[macro_export]
 macro_rules! jmpnotcnd {
     ($vm:ident, $ptrdelta:expr, $value:expr, $delta:expr) => {{
-        $vm.cndstack[$vm.csp] += $delta;
-        if $vm.cndstack[$vm.csp] != $value {
+        let csp = $vm.cndstack.len() - 1;
+        $vm.cndstack[csp] += $delta;
+        if $vm.cndstack[csp] != $value {
             if $ptrdelta.is_negative() {
                 $vm.ip -= $ptrdelta.abs() as usize;
             } else {
@@ -108,8 +113,8 @@ macro_rules! raise {
 macro_rules! exit {
     ($vm:ident) => {{
         let exit = $vm.retstack.len() == 1;
-        if exit {
-            $vm.ip = $vm.retstack.pop().unwrap();
+        if !exit {
+            $vm.ip = $vm.retstack.pop().unwrap() + 1;
         }
         vmlog!(
             $vm,

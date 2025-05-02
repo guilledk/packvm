@@ -2,7 +2,7 @@ use antelope::chain::abi::{ABIResolvedType, ABITypeResolver, ABIView, AbiField, 
 use antelope::chain::binary_extension::BinaryExtension;
 use antelope::serializer::Packer;
 use crate::compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef};
-use crate::{IOStackValue, Value};
+use crate::{IOValue, Value};
 use crate::utils::TypeCompileError;
 
 impl TypeAlias for AbiTypeDef {
@@ -45,7 +45,7 @@ impl StructDef<AbiField> for AbiStruct {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct AntelopeSourceCode {
     aliases: Vec<AbiTypeDef>,
     structs: Vec<AbiStruct>,
@@ -181,6 +181,10 @@ impl SourceCode<
             .any(|a| a.new_type_name == alias && a.r#type == ty)
     }
 
+    fn is_variant(&self, ty: &str) -> bool {
+        self.enums.iter().find(|e| e.name == ty).is_some()
+    }
+
     fn is_variant_of(&self, ty: &str, var: &str) -> bool {
         match self.enums.iter()
             .find(|e| e.name == var) {
@@ -190,14 +194,15 @@ impl SourceCode<
     }
 }
 
-impl<T: IOStackValue> IOStackValue for BinaryExtension<T>
+impl<T> IOValue for BinaryExtension<T>
 where
-    T: Packer + Default,
+    T: IOValue + Packer + Default,
 {
-    fn push_to_stack(&self, out: &mut Vec<Value>) {
+
+    fn as_io(&self) -> Value {
         match &self.value {
-            Some(v) => v.push_to_stack(out),
-            None    => out.push(Value::None),
+            Some(v) => v.as_io(),
+            None    => Value::None,
         }
     }
 }

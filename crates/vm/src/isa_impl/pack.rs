@@ -228,18 +228,19 @@ pub fn extension(vm: &mut PackVM) -> OpResult {
 
 #[inline(always)]
 pub fn pushcnd(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match vm.iostack[vm.iop] {
-        Value::Condition(cnd) => {
-            vm.cndstack.push(cnd);
-            vm.csp += 1;
-            let (size_raw, size_len) = VarUInt32(cnd as u32).encode();
-            vmpack!(vm, buffer, &size_raw[..size_len]);
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("Condition", vm)
-    }
-    vmlog!(vm, "pushcnd", " io -> ({})", vm.cndstack[vm.cndstack.len() - 1]);
     Ok(())
+    // match vm.iostack[vm.iop] {
+    //     Value::Condition(cnd) => {
+    //         vm.cndstack.push(cnd);
+    //         vm.csp += 1;
+    //         let (size_raw, size_len) = VarUInt32(cnd as u32).encode();
+    //         vmpack!(vm, buffer, &size_raw[..size_len]);
+    //         vmstep!(vm);
+    //     }
+    //     _ => return type_mismatch!("Condition", vm)
+    // }
+    // vmlog!(vm, "pushcnd", " io -> ({})", vm.cndstack[vm.cndstack.len() - 1]);
+    // Ok(())
 }
 
 #[tailcall]
@@ -288,7 +289,7 @@ pub fn exec(vm: &mut PackVM, buffer: &mut Vec<u8>) -> Result<(), PackerError> {
         Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
         Instruction::Extension => { extension(vm)?; exec(vm, buffer) }
 
-        Instruction::PushCND => { pushcnd(vm, buffer)?; exec(vm, buffer) }
+        Instruction::PushCND(_) => { pushcnd(vm, buffer)?; exec(vm, buffer) }
         Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
         Instruction::Jmp{ info: _, ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
         Instruction::JmpRet{info, ptr} => { jmpret!(vm, *info, *ptr); exec(vm, buffer) }

@@ -1,3 +1,3 @@
 // mod packing;
-// mod unpacking;
+mod unpacking;
 mod compiler;
