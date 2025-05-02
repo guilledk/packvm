@@ -85,7 +85,7 @@ pub enum Instruction {
     VarInt,
     Float{ size: u8 },
     Bytes,  // bytes with LEB128 encoded size first
-    BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
+    BytesRaw{ size: u8 },  // raw bytes, if param is > 0 do size check on stack value
 
     Optional,  // next value is optional, encode a flag as a u8 before
     Extension,  // extensions are like optionals but they dont encode a flag in a u8
@@ -115,15 +115,14 @@ pub enum Instruction {
 
     // conditional jumps based on first value on condition stack
 
-    // ptrdelta: ip delta to apply if top cnd stack == value
-    // value: condition value to check for
-    // delta: delta to apply to top cnd stack value if != value
-    JmpCND{ ptrdelta: isize, value: isize, delta: isize },
+    // jump to ptr if current condition == value
+    JmpStructCND(
+        u32,  // cnd value
+        usize  // location to jump to
+    ),
 
-    // ptrdelta: ip delta to apply if top cnd stack != value
-    // value: condition value to check for
-    // delta: delta to apply to top cnd stack value if == value
-    JmpNotCND{ ptrdelta: isize, value: isize, delta: isize },  // ip delta to apply, condition value, cnd delta to apply
+    // jump to pointer if condition > 0
+    JmpArrayCND(usize),
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,

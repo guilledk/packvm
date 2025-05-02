@@ -310,8 +310,13 @@ pub enum Instruction {
 
     // conditional jumps based on first value on condition stack
 
-    JmpStructCND(u32, usize),
+    // jump to ptr if current condition == value
+    JmpStructCND(
+        u32,  // cnd value
+        usize  // location to jump to
+    ),
 
+    // jump to pointer if condition > 0
     JmpArrayCND(usize),
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
