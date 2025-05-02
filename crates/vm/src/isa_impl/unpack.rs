@@ -1,25 +1,26 @@
+use std::collections::HashMap;
 use tailcall::tailcall;
-use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, raise};
+use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, section, field};
 use crate::{
     utils::{
         PackerError,
         varint::{VarUInt32, VarInt32}
     },
+    runtime::NamespacePart,
     isa_impl::common::OpResult,
     Value,
     Instruction,
     UnpackVM
 };
-use crate::runtime::NamespacePart;
 
 #[cfg(feature = "debug")]
 macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
-            "ip({:4}) csp({:4}) cnd({:4}) | {:80} | ionsp: {}",
+            "ip({:4}) cnd({:4}) bp({:4}) | {:80} | ionsp: {}",
             $vm.ip,
-            $vm.cndstack.len() - 1,
             $vm.cndstack.last().unwrap_or(&-1),
+            $vm.bp,
             &format!("{}{}", $instr, format_args!($($args)*)),
             $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
         );
@@ -32,30 +33,28 @@ macro_rules! vmlog {
 }
 
 macro_rules! vmstep {
-    ($vm:ident) => {{
+    ($vm:ident) => {
         $vm.ip += 1;
-
-        // match $vm.ionsp.last().unwrap() {
-
-        // }
-    }};
+    };
 }
 
 /// Walk `io` following `nsp`, materialising intermediate containers
 /// (`Value::Array` / `Value::Struct`) when they don’t exist yet, and
 /// return a *mutable* reference to the final slot.
-#[inline(always)]
+// allow unreachable due to how the tailcall macro expands
+#[allow(unreachable_code)]
+#[tailcall]
 fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
-    // out-of recursion: nothing left to consume → return the current slot
+    // out-of recursion: nothing left to consume, return the current slot
     if nsp.is_empty() {
         return io;
     }
 
     match &nsp[0] {
-        // ──────────────────────────────────────────────── Root ────────────
+        // root case
         NamespacePart::Root => vmiomut(io, &nsp[1..]),
 
-        // ─────────────────────────────────────── Array navigation ─────────
+        // array indexing
         NamespacePart::ArrayIndex => {
             if let Value::Array(ref mut arr) = io {
                 let idx = arr.len();
@@ -66,12 +65,10 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
             }
         }
 
-        // ─────────────────────────────────────── Struct navigation ────────
-        NamespacePart::StructField => {
+        // struct field access
+        NamespacePart::StructField(name) => {
             if let Value::Struct(_, ref mut fields) = io {
-                let idx = fields.len();
-                fields.push(("".to_string(), Value::None));
-                let (_, val) = &mut fields[idx];
+                let val = fields.entry(name.clone()).or_insert(Value::None);
                 vmiomut(val, &nsp[1..])
             } else {
                 panic!("expected Value::Struct at {:?} io: {:?}", nsp, io);
@@ -85,16 +82,21 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
             vmiomut(io, &nsp[1..])
         }
 
-        NamespacePart::StructNode(ctype) => {
+        NamespacePart::StructNode(_ctype, name) => {
             if let Value::None = io {
-                *io = Value::Struct(ctype.to_string(), Vec::new());
+                *io = Value::Struct(name.clone(), HashMap::new());
             }
             vmiomut(io, &nsp[1..])
         }
     }
 }
 
-#[macro_export]
+macro_rules! vmgetio {
+    ($vm:expr) => {
+        vmiomut(&mut $vm.io, $vm.ionsp.as_slice())
+    };
+}
+
 macro_rules! vmsetio {
     ($vm:expr, $val:expr) => {{
         let slot = vmiomut(&mut $vm.io, &$vm.ionsp);
@@ -145,11 +147,17 @@ impl_unpack_op!(
 );
 
 #[inline(always)]
-pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
+pub fn boolean(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
     let b = match buffer[vm.bp] {
         0u8 => false,
         1u8 => true,
-        _ => unreachable!()
+        _ => return Err(
+            packer_error!(
+                "Expected encoded boolean but got {} at buffer index {}",
+                buffer[vm.bp],
+                vm.bp
+            )
+        )
     };
     vmsetio!(vm, Value::Bool(b));
     vm.bp += 1;
@@ -243,33 +251,28 @@ pub fn extension(vm: &mut UnpackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn pushcnd(vm: &mut UnpackVM, ctype: u8, buffer: &[u8]) -> OpResult {
+pub fn pushcnd(vm: &mut UnpackVM, buffer: &[u8], ctype: &u8) -> OpResult {
+    let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
+        .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
+    vm.bp += cnd_size;
+    let cnd = cnd.0 as isize;
+    vm.cndstack.push(cnd);
+
     match ctype {
-        0 => {
-            let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
-                .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
-            vm.bp += cnd_size;
-            let cnd = cnd.0 as isize;
-            vm.cndstack.push(cnd);
-            // vm.csp += 1;
+        0u8 => {
             vm.ionsp.push(NamespacePart::ArrayNode);
             vm.ionsp.push(NamespacePart::ArrayIndex);
-        },
-        1 => {
-            let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
-                .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
-            vm.bp += cnd_size;
-            let cnd = cnd.0 as isize;
-            vm.cndstack.push(cnd);
-            // vm.csp += 1;
-            vm.ionsp.push(NamespacePart::StructNode(ctype));
-            vm.ionsp.push(NamespacePart::StructField);
-        },
-        2 => {
-            vm.ionsp.push(NamespacePart::StructNode(ctype));
-            vm.ionsp.push(NamespacePart::StructField);
         }
-        _ => (),
+        1u8 => {
+            let val = vmgetio!(vm);
+            match val {
+                Value::Struct(_name, values) => {
+                    values.insert("type".to_string(), Value::Uint32(cnd as u32));
+                }
+                _ => return Err(packer_error!("expected struct to be target value but got: {}", val)),
+            }
+        }
+        _ => return Err(packer_error!("invalid ctype {}", ctype)),
     }
 
     vmstep!(vm);
@@ -278,10 +281,9 @@ pub fn pushcnd(vm: &mut UnpackVM, ctype: u8, buffer: &[u8]) -> OpResult {
 }
 
 #[tailcall]
-#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
 pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
-    match &vm.code[vm.ip] {
-        Instruction::Bool => { boolean(vm, buffer)?; exec(vm, buffer) }
+    match &vm.executable.code[vm.ip] {
+        Instruction::Bool => { boolean(vm, buffer).map_err(|e| packer_error!("{}\nVM state: {:?}", e.to_string(), vm.ionsp))?; exec(vm, buffer) }
 
         Instruction::UInt{ size} => {
             match size {
@@ -323,13 +325,12 @@ pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
         Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
         Instruction::Extension => { extension(vm, buffer)?; exec(vm, buffer) }
 
-        Instruction::PushCND(ctype) => { pushcnd(vm, *ctype, buffer)?; exec(vm, buffer) }
+        Instruction::PushCND(ctype) => { pushcnd(vm, buffer, ctype)?; exec(vm, buffer) }
         Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
-        Instruction::Jmp{ info: _, ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
-        Instruction::JmpRet{info, ptr} => { jmpret!(vm, *info, *ptr); exec(vm, buffer) }
+        Instruction::Jmp{ ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
+        Instruction::JmpRet{ptr} => { jmpret!(vm, *ptr); exec(vm, buffer) }
         Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
         Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
-        Instruction::Raise{ex} => { raise!(vm, ex)?; exec(vm, buffer) }
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())
@@ -337,7 +338,7 @@ pub fn exec(vm: &mut UnpackVM, buffer: &[u8]) -> Result<(), PackerError> {
                 exec(vm, buffer)
             }
         }
-        Instruction::Section(name) => { Err(packer_error!("Reached section instruction: {}", name))},
-        Instruction::ProgramJmp{..} => { Err(packer_error!("Reached program jmp instruction")) },
+        Instruction::Section(ctype, name) => { section!(vm, *ctype, name); exec(vm, buffer) },
+        Instruction::Field(name) => { field!(vm, name); exec(vm, buffer) },
     }
 }

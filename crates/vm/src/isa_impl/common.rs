@@ -9,8 +9,17 @@ macro_rules! popcnd {
             $vm.cndstack.pop();
         }
         $vm.ip += 1;
-        $vm.ionsp.pop();
-        $vm.ionsp.pop();
+
+        match $vm.nsp_last() {
+            NamespacePart::ArrayNode => {
+                $vm.ionsp.pop();
+            }
+            NamespacePart::ArrayIndex => {
+                $vm.ionsp.pop();
+                $vm.ionsp.pop();
+            }
+            _ => ()
+        }
         vmlog!($vm, "popcnd", "()");
         Ok(())
     }};
@@ -83,35 +92,72 @@ macro_rules! jmpnotcnd {
 
 #[macro_export]
 macro_rules! jmpret {
-    ($vm:ident, $name:expr, $ptr:expr) => {
+    ($vm:ident, $ptr:expr) => {
         $vm.retstack.push($vm.ip);
         $vm.ip = $ptr;
 
         vmlog!(
             $vm,
             "jmpret",
-            "({}, {})",
-            $name, $ptr
+            "({})",
+            $ptr
         );
     };
 }
 
 #[macro_export]
-macro_rules! raise {
-    ($vm:ident, $e:ident) => {{
+macro_rules! section {
+    ($vm:ident, $ctype:expr, $id:expr) => {{
+        let fname = $vm.executable.str_map.get_by_left($id)
+            .ok_or(crate::packer_error!("Failed to resolve struct name from section id: {}", $id))?;
+
+        $vm.ionsp.push(NamespacePart::StructNode($ctype, fname.clone()));
+        $vm.ip += 1;
+
         vmlog!(
             $vm,
-            "raise",
-            "({:?})",
-            $e
+            "section",
+            "({}, {})",
+            $ctype, fname
         );
-        Err(crate::packer_error!("raise exception: {:?}", $e))
+    }};
+}
+
+#[macro_export]
+macro_rules! field {
+    ($vm:ident, $id:expr) => {{
+        match $vm.nsp_last() {
+            NamespacePart::StructNode(_, _) => (),
+            NamespacePart::StructField(_) => { $vm.ionsp.pop(); },
+            _ => return Err(crate::packer_error!("Expected Struct on nsp last, but got {:?}", $vm.nsp_last())),
+        }
+        let fname = $vm.executable.str_map.get_by_left($id)
+            .ok_or(crate::packer_error!("Failed to resolve struct field name from id: {}", $id))?;
+
+        $vm.ionsp.push(NamespacePart::StructField(fname.clone()));
+        $vm.ip += 1;
+
+        vmlog!(
+            $vm,
+            "field",
+            "({})",
+            fname
+        );
     }};
 }
 
 #[macro_export]
 macro_rules! exit {
     ($vm:ident) => {{
+        match $vm.nsp_last() {
+            NamespacePart::StructNode(_, _) => { $vm.ionsp.pop(); }
+            NamespacePart::StructField(_) => {
+                $vm.ionsp.pop();
+                $vm.ionsp.pop();
+            }
+            _ => ()
+        }
+
         let exit = $vm.retstack.len() == 1;
         if !exit {
             $vm.ip = $vm.retstack.pop().unwrap() + 1;

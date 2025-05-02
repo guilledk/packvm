@@ -1,4 +1,7 @@
+#![allow(incomplete_features)]
 #![feature(specialization)]
+extern crate core;
+
 pub mod utils;
 pub mod compiler;
 pub mod isa;

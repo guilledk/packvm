@@ -1,5 +1,5 @@
 use tailcall::tailcall;
-use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, raise};
+use crate::{exit, jmp, jmpcnd, jmpnotcnd, packer_error, popcnd, jmpret, section, field};
 use crate::{
     utils::{
         PackerError,
@@ -7,6 +7,7 @@ use crate::{
             VarUInt32, VarInt32
         },
     },
+    runtime::NamespacePart,
     isa_impl::common::OpResult,
     Value,
     Instruction,
@@ -14,8 +15,8 @@ use crate::{
 };
 
 macro_rules! type_mismatch {
-    ($expected:expr, $self:ident) => {
-        Err(packer_error!("Expected {}, got {}", $expected, &$self.iostack[$self.iop]))
+    ($expected:expr, $got:ident) => {
+        Err(packer_error!("Expected {}, got {}", $expected, $got))
     };
 }
 
@@ -23,13 +24,11 @@ macro_rules! type_mismatch {
 macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
-            "ip({:4}) sp({:4}) csp({:4}) cnd({:4}) | {:80} | s: {:?}",
+            "ip({:4}) cnd({:4}) | {:80} | ionsp: {}",
             $vm.ip,
-            $vm.iop,
-            $vm.csp,
             $vm.cndstack.last().unwrap_or(&-1),
             &format!("{}{}", $instr, format_args!($($args)*)),
-            $vm.iostack.get($vm.iop),
+            $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
         );
     }};
 }
@@ -39,25 +38,86 @@ macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{}};
 }
 
+
+// allow unreachable due to how the tailcall macro expands
+#[allow(unreachable_code)]
+#[tailcall]
+fn vmio<'a>(vm: &PackVM, io: &'a Value, nsp: &[NamespacePart]) -> Result<Option<&'a Value>, PackerError> {
+    // out-of recursion: nothing left to consume, return the current slot
+    if nsp.is_empty() {
+        return Ok(Some(io));
+    }
+
+    match &nsp[0] {
+        // root case
+        NamespacePart::Root => vmio(vm, io, &nsp[1..]),
+
+        // array indexing
+        NamespacePart::ArrayIndex => {
+            if let Value::Array(arr) = io {
+                let cnd_idx = vm.cndstack.len() - nsp.len();
+                if let Some(cnd) = vm.cndstack.get(cnd_idx) {
+                    let index = arr.len() - *cnd as usize;
+                    vmio(vm, &arr[index], &nsp[1..])
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Err(packer_error!("expected Value::Array at {:?}, io: {:#?}", nsp, io))
+            }
+        }
+
+        // struct field access
+        NamespacePart::StructField(name) => {
+            if let Value::Struct(_, fields) = io {
+                if let Some(val) = fields.get(name) {
+                    vmio(vm, val, &nsp[1..])
+                } else {
+                    Ok(None)
+                }
+            } else {
+                Err(packer_error!("expected Value::Struct at {:?}, io: {:#?}", nsp, io))
+            }
+        }
+
+        _ => {
+            vmio(vm, io, &nsp[1..])
+        }
+    }
+}
+
+macro_rules! vmgetio {
+    ($vm:ident, $io:ident) => {
+        vmio($vm, $io, $vm.ionsp.as_slice())?
+    };
+}
+
+macro_rules! vmgetio_expect {
+    ($vm:ident, $io:ident, $expect:ident) => {
+        vmgetio!($vm, $io).ok_or(
+            packer_error!("expected vmgetio to return Some({})", stringify!($expect))
+        )?
+    };
+}
+
 macro_rules! vmstep {
     ($vm:ident) => {
         $vm.ip += 1;
-        $vm.iop += 1;
     };
 }
 
 macro_rules! vmpack {
     ($vm:ident, $buf:ident, $val:expr) => {
-        $buf[$vm.bp..$vm.bp + $val.len()].copy_from_slice($val);
-        $vm.bp += $val.len();
+        $buf.extend_from_slice($val);
     };
 }
 
 macro_rules! impl_pack_op {
     ($( ($fname:ident, $variant:ident, $dbg:literal) ),* $(,)?) => {$(
         #[inline(always)]
-        pub fn $fname(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-            match vm.iostack[vm.iop] {
+        pub fn $fname(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+            let val = vmgetio_expect!(vm, io, $variant);
+            match val {
                 Value::$variant(v) => {
                     vmpack!(
                         vm,
@@ -66,7 +126,7 @@ macro_rules! impl_pack_op {
                     );
                     vmstep!(vm);
                 }
-                _ => return type_mismatch!(stringify!($variant), vm),
+                _ => { return type_mismatch!(stringify!($variant), val) },
             }
             vmlog!(vm, $dbg, "()");
             Ok(())
@@ -95,8 +155,9 @@ const TRUE_BYTES: [u8; 1] = [1u8];
 const FALSE_BYTES: [u8; 1] = [0u8];
 
 #[inline(always)]
-pub fn boolean(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match vm.iostack[vm.iop] {
+pub fn boolean(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Bool);
+    match val {
         Value::Bool(v) => {
             let flag = match v {
                 true => &TRUE_BYTES,
@@ -105,73 +166,78 @@ pub fn boolean(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
             vmpack!(vm, buffer, flag);
             vmstep!(vm);
         }
-        _ => return type_mismatch!("VarUInt32", vm)
+        _ => return type_mismatch!("VarUInt32", val)
     }
     vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
 #[inline(always)]
-pub fn varuint32(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match vm.iostack[vm.iop] {
+pub fn varuint32(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let val = vmgetio_expect!(vm, io, VarUInt32);
+    match val {
         Value::VarUInt32(v) => {
-            let (raw, size) = VarUInt32(v).encode();
+            let (raw, size) = VarUInt32(*v).encode();
             vmpack!(vm, buffer, &raw[..size]);
             vmstep!(vm);
         }
-        _ => return type_mismatch!("VarUInt32", vm)
+        _ => return type_mismatch!("VarUInt32", val)
     }
     vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
 #[inline(always)]
-pub fn varint32(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match vm.iostack[vm.iop] {
+pub fn varint32(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let val = vmgetio_expect!(vm, io, VarInt32);
+    match val {
         Value::VarInt32(v) => {
-            let (raw, size) = VarInt32(v).encode();
+            let (raw, size) = VarInt32(*v).encode();
             vmpack!(vm, buffer, &raw[..size]);
             vmstep!(vm);
         }
-        _ => return type_mismatch!("VarUInt32", vm)
+        _ => return type_mismatch!("VarUInt32", val)
     }
     vmlog!(vm, "varuint32", "()");
     Ok(())
 }
 
 #[inline(always)]
-pub fn float128(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match &vm.iostack[vm.iop] {
+pub fn float128(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Float128);
+    match val {
         Value::Float128(v) => {
             vmpack!(vm, buffer, v);
             vmstep!(vm);
         }
-        _ => return type_mismatch!("Float128", vm)
+        _ => return type_mismatch!("Float128", val)
     }
     vmlog!(vm, "float128", "()");
     Ok(())
 }
 
 #[inline(always)]
-pub fn bytes(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match &vm.iostack[vm.iop] {
+pub fn bytes(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Bytes);
+    match val {
         Value::Bytes(v) => {
             let (size_raw, size_len) = VarUInt32(v.len() as u32).encode();
             let mut array = Vec::with_capacity(size_len + v.len());
             array.extend_from_slice(&size_raw[..size_len]);
-            array.extend_from_slice(v);
+            array.extend_from_slice(&v);
             vmpack!(vm, buffer, array.as_slice());
             vmstep!(vm);
         }
-        _ => return type_mismatch!("Bytes", vm)
+        _ => return type_mismatch!("Bytes", val)
     }
     vmlog!(vm, "bytes", "()");
     Ok(())
 }
 
 #[inline(always)]
-pub fn bytes_raw(vm: &mut PackVM, buffer: &mut Vec<u8>, len: u8) -> OpResult {
-    match &vm.iostack[vm.iop] {
+pub fn bytes_raw(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, len: u8) -> OpResult {
+    let val = vmgetio_expect!(vm, io, BytesRaw);
+    match val {
         Value::Bytes(v) => {
             if len > 0 && v.len() != len as usize {
                 return Err(packer_error!("Raw bytes fixed size mistmatch: {} != {}", v.len(), len))
@@ -179,36 +245,34 @@ pub fn bytes_raw(vm: &mut PackVM, buffer: &mut Vec<u8>, len: u8) -> OpResult {
             vmpack!(vm, buffer, v);
             vmstep!(vm);
         }
-        _ => return type_mismatch!("Bytes", vm)
+        _ => return type_mismatch!("Bytes", val)
     }
     vmlog!(vm, "bytes_raw", "({})", len);
     Ok(())
 }
 
 #[inline(always)]
-pub fn optional(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
-    match &vm.iostack[vm.iop] {
+pub fn optional(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
+    let b = match vmgetio_expect!(vm, io, Optional) {
         Value::None => {
-            buffer[vm.bp] = 0u8;
-            vm.iop += 1;                     // pop the None
             vm.ip += 2;   // jump over wrapped code
             vmlog!(vm, "optional none", "()");
+            0u8
         }
         _ => {
-            buffer[vm.bp] = 1u8;
             vm.ip += 1;                     // execute wrapped code next
             vmlog!(vm, "optional some", "()");
+            1u8
         }
-    }
-    vm.bp += 1;
+    };
+    buffer.push(b);
     Ok(())
 }
 
 #[inline(always)]
-pub fn extension(vm: &mut PackVM) -> OpResult {
-    match vm.iostack.get(vm.iop) {
+pub fn extension(vm: &mut PackVM, io: &Value) -> OpResult {
+    match vmgetio!(vm, io) {
         Some(Value::None) => {
-            vm.iop += 1;                         // pop the sentinel
             vm.ip += 2;       // jump over wrapped code
             vmlog!(vm, "extension none", "()");
         }
@@ -227,83 +291,105 @@ pub fn extension(vm: &mut PackVM) -> OpResult {
 }
 
 #[inline(always)]
-pub fn pushcnd(vm: &mut PackVM, buffer: &mut Vec<u8>) -> OpResult {
+pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: &u8) -> OpResult {
+    let val = vmgetio_expect!(vm, io, AnyPushCND);
+    let cnd: u32 = match val {
+        Value::Array(values) => {
+            vm.ionsp.push(NamespacePart::ArrayNode);
+            vm.ionsp.push(NamespacePart::ArrayIndex);
+            values.len() as u32
+        }
+        Value::Struct(name, fields) => {
+            let type_field = fields.get("type")
+                .ok_or(packer_error!("Cant find type field in enum struct {}: {:?}", name, fields))?;
+
+            match type_field {
+                Value::Uint32(cnd) => {
+                    *cnd
+                }
+                _ => return type_mismatch!("Enum variant id Value::UInt32", val)
+            }
+        }
+        _ => {
+            return match ctype {
+                0u8 => {
+                    type_mismatch!("Array", val)
+                }
+                1u8 => {
+                    type_mismatch!("Struct", val)
+                }
+                _ => unreachable!()
+            }
+        }
+    };
+
+    vm.cndstack.push(cnd as isize);
+    let (size_raw, size_len) = VarUInt32(cnd).encode();
+    vmpack!(vm, buffer, &size_raw[..size_len]);
+    vmstep!(vm);
+    vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cndstack.last().unwrap());
     Ok(())
-    // match vm.iostack[vm.iop] {
-    //     Value::Condition(cnd) => {
-    //         vm.cndstack.push(cnd);
-    //         vm.csp += 1;
-    //         let (size_raw, size_len) = VarUInt32(cnd as u32).encode();
-    //         vmpack!(vm, buffer, &size_raw[..size_len]);
-    //         vmstep!(vm);
-    //     }
-    //     _ => return type_mismatch!("Condition", vm)
-    // }
-    // vmlog!(vm, "pushcnd", " io -> ({})", vm.cndstack[vm.cndstack.len() - 1]);
-    // Ok(())
 }
 
 #[tailcall]
-#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
-pub fn exec(vm: &mut PackVM, buffer: &mut Vec<u8>) -> Result<(), PackerError> {
-    match &vm.program.code[vm.ip] {
-        Instruction::Bool => { boolean(vm, buffer)?; exec(vm, buffer) }
+pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), PackerError> {
+    match &vm.executable.code[vm.ip] {
+        Instruction::Bool => { boolean(vm, io, buffer)?; exec(vm, io, buffer) }
 
         Instruction::UInt {size} => {
             match size {
-                1 => { uint8(vm, buffer)?; exec(vm, buffer) },
-                2 => { uint16(vm, buffer)?; exec(vm, buffer) },
-                4 => { uint32(vm, buffer)?; exec(vm, buffer) },
-                8 => { uint64(vm, buffer)?; exec(vm, buffer) },
-                16 => { uint128(vm, buffer)?; exec(vm, buffer) },
+                1 => { uint8(vm, io, buffer)?; exec(vm, io, buffer) },
+                2 => { uint16(vm, io, buffer)?; exec(vm, io, buffer) },
+                4 => { uint32(vm, io, buffer)?; exec(vm, io, buffer) },
+                8 => { uint64(vm, io, buffer)?; exec(vm, io, buffer) },
+                16 => { uint128(vm, io, buffer)?; exec(vm, io, buffer) },
                 _ => unreachable!()
             }
         }
 
         Instruction::Int {size} => {
             match size {
-                1 => { int8(vm, buffer)?; exec(vm, buffer) },
-                2 => { int16(vm, buffer)?; exec(vm, buffer) },
-                4 => { int32(vm, buffer)?; exec(vm, buffer) },
-                8 => { int64(vm, buffer)?; exec(vm, buffer) },
-                16 => { int128(vm, buffer)?; exec(vm, buffer) },
+                1 => { int8(vm, io, buffer)?; exec(vm, io, buffer) },
+                2 => { int16(vm, io, buffer)?; exec(vm, io, buffer) },
+                4 => { int32(vm, io, buffer)?; exec(vm, io, buffer) },
+                8 => { int64(vm, io, buffer)?; exec(vm, io, buffer) },
+                16 => { int128(vm, io, buffer)?; exec(vm, io, buffer) },
                 _ => unreachable!()
             }
         }
 
-        Instruction::VarUInt => { varuint32(vm, buffer)?; exec(vm, buffer) }
-        Instruction::VarInt => { varint32(vm, buffer)?; exec(vm, buffer) },
+        Instruction::VarUInt => { varuint32(vm, io, buffer)?; exec(vm, io, buffer) }
+        Instruction::VarInt => { varint32(vm, io, buffer)?; exec(vm, io, buffer) },
 
         Instruction::Float {size} => {
             match size {
-                4 => { float32(vm, buffer)?; exec(vm, buffer) },
-                8 => { float64(vm, buffer)?; exec(vm, buffer) },
-                16 => { float128(vm, buffer)?; exec(vm, buffer) },
+                4 => { float32(vm, io, buffer)?; exec(vm, io, buffer) },
+                8 => { float64(vm, io, buffer)?; exec(vm, io, buffer) },
+                16 => { float128(vm, io, buffer)?; exec(vm, io, buffer) },
                 _ => unreachable!()
             }
         }
 
-        Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
-        Instruction::BytesRaw{ size } => { bytes_raw(vm, buffer, *size)?; exec(vm, buffer) }
+        Instruction::Bytes => { bytes(vm, io, buffer)?; exec(vm, io, buffer) }
+        Instruction::BytesRaw{ size } => { bytes_raw(vm, io, buffer, *size)?; exec(vm, io, buffer) }
 
-        Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }
-        Instruction::Extension => { extension(vm)?; exec(vm, buffer) }
+        Instruction::Optional => { optional(vm, io, buffer)?; exec(vm, io, buffer) }
+        Instruction::Extension => { extension(vm, io)?; exec(vm, io, buffer) }
 
-        Instruction::PushCND(_) => { pushcnd(vm, buffer)?; exec(vm, buffer) }
-        Instruction::PopCND => { popcnd!(vm)?; exec(vm, buffer) }
-        Instruction::Jmp{ info: _, ptr} => { jmp!(vm, *ptr)?; exec(vm, buffer) }
-        Instruction::JmpRet{info, ptr} => { jmpret!(vm, *info, *ptr); exec(vm, buffer) }
-        Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
-        Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, buffer) }
-        Instruction::Raise{ex} => { raise!(vm, ex)?; exec(vm, buffer) }
+        Instruction::PushCND(ctype) => { pushcnd(vm, io, buffer, ctype)?; exec(vm, io, buffer) }
+        Instruction::PopCND => { popcnd!(vm)?; exec(vm, io, buffer) }
+        Instruction::Jmp{ ptr} => { jmp!(vm, *ptr)?; exec(vm, io, buffer) }
+        Instruction::JmpRet{ptr} => { jmpret!(vm, *ptr); exec(vm, io, buffer) }
+        Instruction::JmpCND{ ptrdelta: target, value, delta} => { jmpcnd!(vm, *target, *value, *delta)?; exec(vm, io, buffer) }
+        Instruction::JmpNotCND{ ptrdelta: target, value, delta} => { jmpnotcnd!(vm, *target, *value, *delta)?; exec(vm, io, buffer) }
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())
             } else {
-                exec(vm, buffer)
+                exec(vm, io, buffer)
             }
         }
-        Instruction::Section(name) => { Err(packer_error!("Reached section instruction: {}", name))}
-        Instruction::ProgramJmp{..} => { Err(packer_error!("Reached program jmp instruction")) },
+        Instruction::Section(ctype, name) => { section!(vm, *ctype, name); exec(vm, io, buffer) },
+        Instruction::Field(name) => { field!(vm, name); exec(vm, io, buffer) },
     }
 }

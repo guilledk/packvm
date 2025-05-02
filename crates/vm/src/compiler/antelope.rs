@@ -118,7 +118,7 @@ impl TryFrom<ABI> for AntelopeSourceCode {
         Ok(AntelopeSourceCode {
             aliases,
             enums,
-            structs
+            structs,
         })
     }
 }
@@ -137,7 +137,7 @@ impl TryFrom<ShipABI> for AntelopeSourceCode {
         Ok(AntelopeSourceCode {
             aliases,
             enums,
-            structs
+            structs,
         })
     }
 }
@@ -151,7 +151,6 @@ impl SourceCode<
     fn structs(&self) -> &[AbiStruct] {
         self.structs.as_slice()
     }
-
     fn enums(&self) -> &[AbiVariant] {
         self.enums.as_slice()
     }

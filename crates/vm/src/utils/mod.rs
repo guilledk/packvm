@@ -39,6 +39,7 @@ macro_rules! define_error {
     };
 }
 
+define_error!(ResolveStrIDError);
 define_error!(TypeCompileError);
 #[macro_export]
 macro_rules! compiler_error {

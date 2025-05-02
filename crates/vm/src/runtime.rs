@@ -1,10 +1,10 @@
-use crate::{debug_log, payload_size, Instruction};
+use crate::debug_log;
 use crate::{
     utils::PackerError,
-    compiler::Program,
     isa::Value,
     isa_impl::{pack, unpack}
 };
+use crate::compiler::assembly::Executable;
 
 #[derive(Debug)]
 pub enum NamespacePart {
@@ -13,8 +13,8 @@ pub enum NamespacePart {
     ArrayNode,
     ArrayIndex,
 
-    StructNode(u8),
-    StructField,
+    StructNode(u8, String),
+    StructField(String),
 }
 
 impl Into<String> for &NamespacePart {
@@ -23,88 +23,78 @@ impl Into<String> for &NamespacePart {
             NamespacePart::Root => "$".to_string(),
             NamespacePart::ArrayNode => "array".to_string(),
             NamespacePart::ArrayIndex => "idx".to_string(),
-            NamespacePart::StructNode(ctype) => match ctype {
-                1u8 => "enum".to_string(),
-                2u8 => "struct".to_string(),
+            NamespacePart::StructNode(ctype, name) => match ctype {
+                1u8 => format!("enum({})", name),
+                2u8 => format!("struct({})", name),
                 _ => unreachable!()
             },
-            NamespacePart::StructField => "field".to_string(),
+            NamespacePart::StructField(name) => name.clone(),
         }
     }
 }
 
 
 pub struct PackVM<'a> {
-    pub(crate) ip:  usize,
-    pub(crate) bp: usize,
-    pub(crate) iop:  usize,
-    pub(crate) csp: usize,
+    pub(crate) ip: usize,
 
-    pub(crate) cndstack:   Vec<isize>,
-    pub(crate) retstack:   Vec<usize>,
+    pub(crate) cndstack: Vec<isize>,
+    pub(crate) retstack: Vec<usize>,
 
-    pub(crate) iostack:      &'a [Value],
     pub(crate) ionsp: Vec<NamespacePart>,
-    pub(crate) program: &'a Program,
+    pub(crate) executable: &'a Executable
 }
 
 impl<'a> PackVM<'a> {
-    pub fn init(
-        program: &'a Program,
-        iostack: &'a [Value]
-    ) -> PackVM<'a> {
+    pub fn from_executable(executable: &'a Executable) -> Self {
+        debug_log!("Initialized VM with executable: \n{:?}", executable);
         PackVM {
             ip: 0,
-            bp: 0,
-            iop: 0,
-            csp: 0,
             cndstack: vec![0],
             retstack: vec![0],
 
             ionsp: vec![NamespacePart::Root],
 
-            iostack,
-            program
+            executable
         }
     }
-}
 
-impl<'a> PackVM<'a> {
     pub fn run(
-        program: &Program,
-        stack: &[Value]
+        &mut self,
+        program: usize,
+        io: &Value
     ) -> Result<Vec<u8>, PackerError> {
-        let mut vm = PackVM::init(program, stack);
-        let size = program.base_size + payload_size!(stack);
-        let mut buffer: Vec<u8> = vec![0; size];
+        let mut buffer: Vec<u8> = vec![];
+        self.ip = program;
 
-        debug_log!("Running pack program: ");
-        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
-        for op in program.code.iter().enumerate() {
-            debug_log!("{:?}", op);
-        }
-        debug_log!("With stack: \n{:#?}", stack);
+        debug_log!("Running pack program: {}", program);
 
-        pack::exec(&mut vm, &mut buffer)?;
+        pack::exec(self, io, &mut buffer)?;
 
         Ok(buffer)
+    }
+
+    #[inline(always)]
+    pub fn nsp_last(&self) -> &NamespacePart {
+        let last = self.ionsp.len() - 1;
+        &self.ionsp[last]
     }
 }
 
 pub struct UnpackVM<'a> {
-    pub(crate) ip:  usize,
+    pub(crate) ip: usize,
     pub(crate) bp: usize,
 
-    pub(crate) cndstack:   Vec<isize>,
-    pub(crate) retstack:   Vec<usize>,
+    pub(crate) cndstack: Vec<isize>,
+    pub(crate) retstack: Vec<usize>,
 
     pub(crate) io: Value,
     pub(crate) ionsp: Vec<NamespacePart>,
-    pub(crate) code: &'a [Instruction]
+    pub(crate) executable: &'a Executable
 }
 
 impl<'a> UnpackVM<'a> {
-    pub fn init(code: &'a [Instruction]) -> Self {
+    pub fn from_executable(executable: &'a Executable) -> Self {
+        debug_log!("Initialized VM with executable: \n{:?}", executable);
         Self {
             ip: 0,
             bp: 0,
@@ -115,30 +105,27 @@ impl<'a> UnpackVM<'a> {
             io: Value::None,
             ionsp: vec![NamespacePart::Root],
 
-            code
+            executable
         }
     }
-}
 
-impl<'a> UnpackVM<'a> {
     pub fn run(
-        program: u64,
-        code: &[Instruction],
+        &mut self,
+        program: usize,
         buffer: &[u8]
-    ) -> Result<Value, PackerError> {
-        let mut vm = UnpackVM::init(code);
-        vm.ip = program as usize;
+    ) -> Result<&Value, PackerError> {
+        self.ip = program;
 
-        debug_log!("Running unpack program: ");
-        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
-        for op in code.iter().enumerate() {
-            debug_log!("{:?}", op);
-        }
+        debug_log!("Running unpack program: {}", program);
 
-        unpack::exec(&mut vm, buffer)?;
+        unpack::exec(self, buffer)?;
 
-        debug_log!("Output: \n{:#?}", vm.io);
+        Ok(&self.io)
+    }
 
-        Ok(vm.io)
+    #[inline(always)]
+    pub fn nsp_last(&self) -> &NamespacePart {
+        let last = self.ionsp.len() - 1;
+        &self.ionsp[last]
     }
 }

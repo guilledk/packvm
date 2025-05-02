@@ -1,5 +1,7 @@
 use std::collections::HashMap;
-use crate::compiler::ProgramNamespace;
+use std::fmt::{Debug, Formatter};
+use bimap::BiHashMap;
+use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef};
 use crate::debug_log;
 use crate::isa::Instruction;
 use crate::compiler_error;
@@ -14,115 +16,151 @@ macro_rules! assemble {
     };
 }
 
-fn assemble_section(
-    executable: &mut Vec<Instruction>,
-    sections: &HashMap<String, usize>,
-    sec_name: &str,
-) -> Result<(), TypeCompileError> {
-    let start_ptr = sections.get(sec_name)
-        .ok_or(compiler_error!("Couldn't find section {}", sec_name))?
-        .clone();
+pub struct Executable {
+    pub code: Vec<Instruction>,
+    pub str_map: BiHashMap<usize, String>,
+}
 
-    debug_log!("Assemble section {}", sec_name);
-
-    let mut ptr = start_ptr;
-    let mut found_exit = false;
-    while ptr < executable.len() || found_exit {
-
-        match executable[ptr].clone() {
-            Instruction::Exit => {
-                found_exit = true;
-                break;
-            },
-            Instruction::Jmp {info, ptr: jptr} => {
-                executable[ptr] = Instruction::Jmp {
-                    info,
-                    ptr: start_ptr + jptr
-                };
-            },
-            Instruction::ProgramJmp {name, ptr: _, ret: _} => {
-                executable[ptr] = Instruction::JmpRet {
-                    info: name.clone(),
-                    ptr: sections.get(&name)
-                        .ok_or(compiler_error!("Couldn't find section {}", name))?
-                        .clone(),
-                }
-            }
-            _ => ()
+impl Debug for Executable {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "Executable:",
+        )?;
+        writeln!(f, "Code: [")?;
+        for (idx, op) in self.code.iter().enumerate() {
+            writeln!(f, "\t{:3}: {:?}", idx, op)?;
         }
-        ptr += 1;
+        writeln!(f, "]")?;
+        writeln!(f, "Strings: [")?;
+        for i in 0..self.str_map.len() {
+            let not_str = format!("unknown {}", i);
+            let str = self.str_map.get_by_left(&i)
+                .unwrap_or(&not_str);
+            writeln!(f, "\t{:4}: {:?}", i, str)?;
+        }
+        writeln!(f, "]")
     }
-    if !found_exit {
-        return Err(compiler_error!("Ran out of code while looking for exit of section: {}", sec_name));
+}
+
+fn assemble_sections<
+    A: TypeAlias,
+    T: TypeDef,
+    E: EnumDef,
+    S: StructDef<T>,
+    Source: SourceCode<A, T, E, S> + Debug
+>(
+    src_ns: &ProgramNamespace<A, T, E, S, Source>,
+    executable: &mut Vec<Instruction>,
+    sections: &HashMap<usize, usize>,
+) -> Result<(), TypeCompileError> {
+    for sec_name in sections.keys() {
+        let start_ptr = sections.get(sec_name)
+            .ok_or(compiler_error!("Couldn't find section {}", sec_name))?
+            .clone();
+
+        let sec_program = src_ns.get_program(sec_name)
+            .ok_or(compiler_error!("Couldn't find section program {}", sec_name))?;
+
+        debug_log!("Assemble section {}", sec_name);
+
+        let mut ptr = start_ptr;
+        let mut found_exit = false;
+        while ptr < executable.len() || found_exit {
+            match executable[ptr].clone() {
+                Instruction::Exit => {
+                    found_exit = true;
+                    break;
+                },
+                Instruction::Jmp { ptr: jptr } => {
+                    executable[ptr] = Instruction::Jmp {
+                        ptr: start_ptr + jptr
+                    };
+                },
+                Instruction::Field(rel_str_id) => {
+                    let field_name = sec_program.strings.get(rel_str_id)
+                        .ok_or(compiler_error!("Couldn't find str of field id: {}", &rel_str_id))?;
+
+                    let str_id = src_ns.strings.get_by_right(field_name.as_str())
+                        .ok_or(compiler_error!("Couldn't find absolute id of field str: {}", field_name))?
+                        .clone();
+
+                    executable[ptr] = Instruction::Field(str_id);
+                }
+                Instruction::JmpRet { ptr: id } => {
+                    executable[ptr] = Instruction::JmpRet {
+                        ptr: sections.get(&id)
+                            .ok_or(compiler_error!("Couldn't find section {}", id))?
+                            .clone(),
+                    }
+                }
+                _ => ()
+            }
+            ptr += 1;
+        }
+        if !found_exit {
+            return Err(compiler_error!("Ran out of code while looking for exit of section: {}", sec_name));
+        }
     }
     Ok(())
 }
 
-pub fn assemble(
-    src_ns: &ProgramNamespace
-) -> Result<Vec<Instruction>, TypeCompileError> {
-    let program_count = src_ns.len();
+pub fn assemble<
+    A: TypeAlias,
+    T: TypeDef,
+    E: EnumDef,
+    S: StructDef<T>,
+    Source: SourceCode<A, T, E, S> + Debug
+>(
+    src_ns: &ProgramNamespace<A, T, E, S, Source>,
+) -> Result<Executable, TypeCompileError> {
+    let mut code = Vec::new();
 
-    let mut executable = Vec::new();
-
+    // namespace .into_iter() is guaranteed to be in order of pid
     for program in src_ns.into_iter() {
-        executable.insert(program.id as usize, Instruction::Jmp {
-            info: program.name.clone(),
-            ptr: 0
+        // insert jump table entry for program, for now ptr will just contain the pid
+        // will be fixed during section assembly
+        code.insert(program.id, Instruction::Jmp {
+            ptr: program.id
         });
-        executable.push(Instruction::Section(program.name.clone()));
-        executable.extend(program.code.clone());
     }
 
     let mut sections = HashMap::new();
-    for i in 0..program_count {
-        match executable[i].clone() {
-            Instruction::Jmp {info, ptr: _} => {
-                let mut section_ptr = program_count;
-                while section_ptr < executable.len() {
-                    if let Instruction::Section(section_name) = &executable[section_ptr] {
-                        if section_name == &info {
-                            break;
-                        }
-                    }
-                    section_ptr += 1;
-                }
-                sections.insert(info.clone(), section_ptr + 1);
-                executable[i] = Instruction::Jmp {info: info.clone(), ptr: section_ptr + 1}
-            }
-            _ => ()
-        }
+    for program in src_ns.into_iter() {
+        let section_ptr = code.len();
+        sections.insert(program.id, section_ptr);
+        // fix jump table entry
+        code[program.id] = Instruction::Jmp {ptr: section_ptr};
+        // append program code at the end of executable
+        code.extend(program.code.clone());
     }
 
-    for section in sections.keys().cloned() {
-        assemble_section(
-            &mut executable,
-            &sections,
-            &section,
-        )?
-    }
+    assemble_sections(
+        src_ns,
+        &mut code,
+        &sections,
+    )?;
 
     #[cfg(feature = "debug")]
     {
-        for op in executable.iter().enumerate() {
+        for op in code.iter().enumerate() {
             debug_log!("{:?}", op)
         }
         // validate
-        for op in executable[0..src_ns.len()].iter().cloned() {
+        for (jmp_i, op) in code[0..src_ns.len()].iter().cloned().enumerate() {
             match op {
-                Instruction::Jmp { info, ptr } => {
-                    if info.contains("end of") { continue; }
+                Instruction::Jmp { ptr } => {
 
-                    let src_program = src_ns.get_program(&info)
-                        .ok_or(compiler_error!("Couldn't find source program: {}", info))?;
+                    let src_program = src_ns.get_program(&jmp_i)
+                        .ok_or(compiler_error!("Couldn't find source program: {}", jmp_i))?;
 
                     let mut i = ptr;
-                    while executable[i].clone() != Instruction::Exit {
+                    while code[i].clone() != Instruction::Exit {
                         let rel_i = i - ptr;
-                        let asm_op = &executable[i];
+                        let asm_op = &code[i];
                         let src_op = &src_program.code[rel_i];
                         if !Instruction::validate_asm(src_op, asm_op) {
-                            debug_log!("{} different at {}: {:?} -> {:?}", &info, i, src_op, asm_op);
+                            debug_log!("{} different at {}: {:?} -> {:?}", jmp_i, i, src_op, asm_op);
                             debug_log!("Source:\n{:#?}", src_program);
                             return Err(compiler_error!("Validation falied!"));
                         }
@@ -134,5 +172,8 @@ pub fn assemble(
         }
     }
 
-    Ok(executable)
+    Ok(Executable{
+        code,
+        str_map: src_ns.strings.clone(),
+    })
 }

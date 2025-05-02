@@ -1,18 +1,14 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    parse_macro_input, Attribute, Lit, LitStr, Meta, MetaNameValue,
+    parse_macro_input, Data, DeriveInput, Fields, Attribute, Lit, LitStr, Meta, MetaNameValue,
 };
 
-/// Helper ─ looks for `#[stack_name = "foo"]` on the item.
-fn stack_name_attr(attrs: &[Attribute], default: &str) -> LitStr {
+fn vm_name_attr(attrs: &[Attribute], default: &str) -> LitStr {
     for attr in attrs {
-        if attr.path.is_ident("stack_name") {
+        if attr.path.is_ident("vm_name") {
             match attr.parse_meta() {
-                Ok(Meta::NameValue(MetaNameValue {
-                                       lit: Lit::Str(lit),
-                                       ..
-                                   })) => return lit,
+                Ok(Meta::NameValue(MetaNameValue { lit: Lit::Str(lit), .. })) => return lit,
                 _ => panic!("`stack_name` must be of the form #[stack_name = \"…\"]"),
             }
         }
@@ -20,24 +16,21 @@ fn stack_name_attr(attrs: &[Attribute], default: &str) -> LitStr {
     LitStr::new(default, proc_macro2::Span::call_site())
 }
 
-#[proc_macro_derive(StackStruct, attributes(stack_name))]
+#[proc_macro_derive(VMStruct, attributes(vm_name))]
 pub fn stack_struct(input: TokenStream) -> TokenStream {
-    use quote::quote;
-    use syn::{parse_macro_input, Data, DeriveInput};
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let struct_name = vm_name_attr(&input.attrs, &name.to_string());
 
-    let input        = parse_macro_input!(input as DeriveInput);
-    let name         = &input.ident;
-    let struct_name  = stack_name_attr(&input.attrs, &name.to_string());
-
-    // ── collect fields in declaration order ─────────────────────────
+    // collect fields in declaration order
     let fields = match &input.data {
         Data::Struct(s) => &s.fields,
-        _               => panic!("StackStruct can only be derived for structs"),
+        _ => panic!("StackStruct can only be derived for structs"),
     };
     let field_count = fields.len();
 
-    // build Vec<(String, Value)>
-    let pushes = fields.iter().enumerate().map(|(idx, f)| {
+    // build HashMap<String, Value>
+    let inserts = fields.iter().enumerate().map(|(idx, f)| {
         let key = f.ident
             .as_ref()
             .map(|id| id.to_string())
@@ -51,38 +44,34 @@ pub fn stack_struct(input: TokenStream) -> TokenStream {
             });
 
         quote! {
-            vec.push((#key.to_string(), ::packvm::IOValue::as_io(#access)));
+            map.insert(#key.to_string(), ::packvm::IOValue::as_io(#access));
         }
     });
 
     quote! {
         impl ::packvm::IOValue for #name {
             fn as_io(&self) -> ::packvm::Value {
-                let mut vec = Vec::<(String, ::packvm::Value)>::with_capacity(#field_count);
-                #( #pushes )*
-                ::packvm::Value::Struct(#struct_name.to_string(), vec)
+                let mut map = ::std::collections::HashMap::<String, ::packvm::Value>::with_capacity(#field_count);
+                #( #inserts )*
+                ::packvm::Value::Struct(#struct_name.to_string(), map)
             }
         }
     }
         .into()
 }
 
-#[proc_macro_derive(StackEnum, attributes(stack_name))]
+#[proc_macro_derive(VMEnum, attributes(vm_name))]
 pub fn stack_enum(input: TokenStream) -> TokenStream {
-    use quote::quote;
-    use syn::{parse_macro_input, Data, DeriveInput, Fields};
-
-    /* ────── parse input ─────────────────────────────────────────── */
-    let input      = parse_macro_input!(input as DeriveInput);
-    let name       = &input.ident;
-    let enum_name  = stack_name_attr(&input.attrs, &name.to_string());
+    let input = parse_macro_input!(input as DeriveInput);
+    let name = &input.ident;
+    let enum_name = vm_name_attr(&input.attrs, &name.to_string());
 
     let variants = match &input.data {
         Data::Enum(e) => &e.variants,
-        _             => panic!("StackEnum can only be derived for enums"),
+        _ => panic!("StackEnum can only be derived for enums"),
     };
 
-    /* ────── one match-arm per variant ───────────────────────────── */
+    // one match‑arm per variant
     let arms = variants.iter().enumerate().map(|(idx, v)| {
         let v_ident = &v.ident;
 
@@ -93,33 +82,30 @@ pub fn stack_enum(input: TokenStream) -> TokenStream {
 
         quote! {
             #name::#v_ident(inner) => {
-                // 1. "type" field with variant index
-                let mut vec = Vec::<(String, ::packvm::Value)>::new();
-                vec.push((
-                    "type".to_string(),
-                    ::packvm::Value::Uint32(#idx as u32)
-                ));
+                // create the map and insert "type"
+                let mut map = ::std::collections::HashMap::<String, ::packvm::Value>::new();
+                map.insert("type".to_string(), ::packvm::Value::Uint32(#idx as u32));
 
-                // 2. flatten payload if it is a struct, else keep under "value"
+                // flatten payload if it is a struct, else keep under "value"
                 match ::packvm::IOValue::as_io(inner) {
-                    ::packvm::Value::Struct(_, mut fields) => {
-                        vec.extend(fields.drain(..));
+                    ::packvm::Value::Struct(_, fields) => {
+                        map.extend(fields.into_iter());
                     }
-                    other => vec.push(("value".to_string(), other)),
+                    other => {
+                        map.insert("value".to_string(), other);
+                    }
                 }
 
-                ::packvm::Value::Struct(#enum_name.to_string(), vec)
+                ::packvm::Value::Struct(#enum_name.to_string(), map)
             }
         }
     });
 
-    /* ────── generate impl ───────────────────────────────────────── */
     quote! {
         impl ::packvm::IOValue for #name {
             fn as_io(&self) -> ::packvm::Value {
                 match self { #( #arms ),* }
             }
         }
-    }
-        .into()
+    }.into()
 }

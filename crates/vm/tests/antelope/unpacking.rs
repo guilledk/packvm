@@ -8,11 +8,22 @@ use antelope::{
     serializer::{Encoder, Decoder, Packer, PackerError},
     EnumPacker, StructPacker
 };
-use packvm::{UnpackVM, Value, IOValue, compiler::{
-    antelope::AntelopeSourceCode,
-}, Instruction, compile_source, assemble};
-use packvm::compiler::{compile_type, Program};
-use packvm_macros::{StackStruct, StackEnum};
+use packvm::{
+    UnpackVM,
+    Value,
+    IOValue,
+    Instruction,
+    compiler::{
+        compile_type,
+        Program,
+        SourceCode,
+        antelope::AntelopeSourceCode,
+        assembly::Executable
+    },
+    compile_source,
+    assemble
+};
+use packvm_macros::{VMStruct, VMEnum};
 
 const TESTABI: &str = include_str!("test_abi.json");
 
@@ -24,8 +35,13 @@ macro_rules! unpack_and_assert {
         let mut program = Program::default();
         compile_type(&src, $type_name, &mut program).expect("failed to compile");
         program.code.push(Instruction::Exit);
-        let decoded = UnpackVM::run(0, program.code.as_slice(), $bytes).expect("Unpack failed");
-        assert_eq!(decoded, $expected);
+        let exec = Executable {
+            code: program.code.clone(),
+            str_map: bimap::BiHashMap::default(),
+        };
+        let mut vm = UnpackVM::from_executable(&exec);
+        let decoded = vm.run(0, $bytes).expect("Unpack failed");
+        assert_eq!(*decoded, $expected);
     }};
 }
 
@@ -134,19 +150,34 @@ fn test_unpack_extension() {
 
 #[test]
 fn test_unpack_struct() {
-    #[derive(Serialize, PartialEq, Debug, EnumPacker, StackEnum)]
-    #[stack_name = "test_enum"]
-    enum TestEnum {
-        #[stack_name = "test_enum_v0"]
-        Type0(u64),
-        #[stack_name = "test_enum_v1"]
-        Type1(f64),
-        #[stack_name = "test_enum_v2"]
-        Type2(String),
+    #[derive(Default, Serialize, PartialEq, Debug, StructPacker, VMStruct)]
+    #[vm_name = "test_enum_v0"]
+    struct TestStructV0 {
+        field: u64,
     }
 
-    #[derive(Serialize, PartialEq, Debug, StructPacker, StackStruct)]
-    #[stack_name = "test_struct"]
+    #[derive(Default, Serialize, PartialEq, Debug, StructPacker, VMStruct)]
+    #[vm_name = "test_enum_v1"]
+    struct TestStructV1 {
+        field: f64,
+    }
+
+    #[derive(Default, Serialize, PartialEq, Debug, StructPacker, VMStruct)]
+    #[vm_name = "test_enum_v2"]
+    struct TestStructV2 {
+        field: String,
+    }
+
+    #[derive(Serialize, PartialEq, Debug, EnumPacker, VMEnum)]
+    #[vm_name = "test_enum"]
+    enum TestEnum {
+        Type0(TestStructV0),
+        Type1(TestStructV1),
+        Type2(TestStructV2),
+    }
+
+    #[derive(Serialize, PartialEq, Debug, StructPacker, VMStruct)]
+    #[vm_name = "test_struct"]
     struct TestStruct {
         field0: bool,
         field1: u32,
@@ -179,7 +210,7 @@ fn test_unpack_struct() {
             "fourth".to_string(),
         ],
         field5: Some(vec![1, 2, 3, 4, 5]),
-        field6: TestEnum::Type2("type2".to_string()),
+        field6: TestEnum::Type2(TestStructV2 {field: "type2".to_string()}),
         field7: false,
         field8: 69,
         field9: 69,
@@ -194,15 +225,14 @@ fn test_unpack_struct() {
 
     let expected: Value = test.as_io();
 
-    println!("{:#?}", expected);
-
     let abi: ABI = from_str(TESTABI).expect("failed to parse ABI JSON");
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let program = ns.get_program("test_struct").expect("failed to get program");
+    let pid = src.program_id_for("test_struct").expect("failed to get program");
 
-    let decoded = UnpackVM::run(program.id, &code, enc.get_bytes()).expect("Unpack failed");
-    assert_eq!(decoded, expected);
+    let mut vm = UnpackVM::from_executable(&code);
+    let decoded = vm.run(pid, enc.get_bytes()).expect("Unpack failed");
+    assert_eq!(*decoded, expected);
 }

@@ -4,17 +4,20 @@ pub mod assembly;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::fmt::Debug;
+use std::marker::PhantomData;
+use bimap::BiHashMap;
 use crate::{debug_log, instruction_for};
 use crate::isa::Instruction;
 use crate::isa::payload_base_size_of;
 use crate::compiler_error;
-use crate::utils::TypeCompileError;
+use crate::utils::{TypeCompileError};
 
 #[inline(always)]
 pub fn ok_or_panic<T, E: Error>(maybe_err: Result<T, E>) -> T {{
     maybe_err
         .unwrap_or_else(
-            |e| panic!("Compiler error: {}", e.to_string())
+            |e| panic!("Compiler error:\n\t{}", e.to_string())
         )
 }}
 
@@ -90,58 +93,124 @@ pub trait SourceCode<
     fn aliases(&self) -> &[Alias];
     fn resolve_alias(&self, alias: &str) -> Option<String>;
 
+    // predicates
     fn is_std_type(&self, ty: &str) -> bool;
     fn is_alias_of(&self, alias: &str, ty: &str) -> bool;
-
     fn is_variant(&self, ty: &str) -> bool;
-
     fn is_variant_of(&self, ty: &str, var: &str) -> bool;
+
+    fn program_id_for(&self, name: &str) -> Option<usize> {
+        if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
+            return Some(id);
+        }
+
+        if let Some(id) = self.enums().iter().position(|s| s.name() == name) {
+            return Some(id + self.structs().len());
+        }
+
+        None
+    }
 }
 
 #[derive(Default)]
 pub struct Program {
-    pub id: u64,
+    pub id: usize,
     pub name: String,
+
     pub code: Vec<Instruction>,
-    pub deps: HashSet<String>,
+    pub deps: HashSet<usize>,
+    pub strings: Vec<String>,
+
     pub base_size: usize,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ProgramNamespace {
-    ns: HashMap<String, Program>,
+#[derive(Debug, Clone)]
+pub struct ProgramNamespace<
+    'a,
+    A: TypeAlias,
+    T: TypeDef,
+    E: EnumDef,
+    S: StructDef<T>,
+    Source: SourceCode<A, T, E, S> + Debug
+> {
+    src: &'a Source,
+    ns: HashMap<usize, Program>,
+    strings: BiHashMap<usize, String>,
+    _marker: PhantomData<(A, T, E, S)>,
 }
 
-impl ProgramNamespace {
-
-    pub fn get_program(&self, name: &str) -> Option<&Program> {
-        self.ns.get(name)
-    }
-
-    pub fn get_program_mut(&mut self, name: &str) -> Option<&mut Program> {
-        self.ns.get_mut(name)
-    }
-    pub fn get_program_or_init(&mut self, name: &str) -> &mut Program {
-        if self.ns.contains_key(name) {
-            return self.ns.get_mut(name).unwrap()
+impl<
+    'a,
+    A: TypeAlias,
+    T: TypeDef,
+    E: EnumDef,
+    S: StructDef<T>,
+    Source: SourceCode<A, T, E, S> + Debug
+> ProgramNamespace<'a, A, T, E, S, Source> {
+    pub fn from_source(src: &'a Source) -> Self {
+        Self {
+            src,
+            ns: HashMap::default(),
+            strings: BiHashMap::default(),
+            _marker: PhantomData::default(),
         }
-        let prog = Program {
-            id: self.ns.len() as u64,
-            name: name.to_string(),
-            code: Vec::new(),
-            deps: HashSet::new(),
-            base_size: 0,
-        };
-        self.ns.insert(name.to_string(), prog);
-        self.ns.get_mut(name).unwrap()
+    }
+
+    pub fn get_program_by_name(&self, name: &str) -> Option<&Program> {
+        if let Some(id) = self.src.program_id_for(name) {
+            return self.ns.get(&id);
+        }
+        None
+    }
+
+    pub fn get_program(&self, id: &usize) -> Option<&Program> {
+        self.ns.get(id)
+    }
+
+    pub fn get_program_or_init(&mut self, name: &str) -> Result<&mut Program, TypeCompileError> {
+        let id = self.src.program_id_for(name)
+            .ok_or(compiler_error!("Program \"{}\" unknown", name))?;
+
+        Ok(self.ns.entry(id).or_insert_with(|| {
+            Program {
+                id,
+                name: name.to_string(),
+                code: Vec::new(),
+                deps: HashSet::new(),
+                strings: Vec::new(),
+                base_size: 0,
+            }
+        }))
     }
 
     pub fn len(&self) -> usize {
         self.ns.len()
     }
+
+    pub fn calculate_string_map(&mut self) -> () {
+        self.strings.clear();
+        let mut field_id = self.len();
+        for program in self.ns.values().collect::<Vec<&Program>>() {
+            self.strings.insert(program.id, program.name.clone());
+            for string in &program.strings {
+                if self.strings.contains_right(string) {
+                    continue;
+                }
+                self.strings.insert(field_id, string.clone());
+                field_id += 1;
+            }
+        }
+    }
 }
 
-impl<'a> IntoIterator for &'a ProgramNamespace {
+impl<
+    'a,
+    A: TypeAlias,
+    T: TypeDef,
+    E: EnumDef,
+    S: StructDef<T>,
+    Source: SourceCode<A, T, E, S> + Debug
+> IntoIterator for &'a ProgramNamespace<'a, A, T, E, S, Source> {
     type Item = &'a Program;
     type IntoIter = std::vec::IntoIter<&'a Program>;
 
@@ -154,7 +223,7 @@ impl<'a> IntoIterator for &'a ProgramNamespace {
     }
 }
 
-impl fmt::Debug for Program {
+impl Debug for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
@@ -176,6 +245,7 @@ impl Clone for Program {
             name: self.name.clone(),
             code: self.code.clone(),
             deps: self.deps.clone(),
+            strings: self.strings.clone(),
             base_size: self.base_size,
         }
     }
@@ -208,12 +278,14 @@ pub fn compile_type_ops<
         return Ok(std_op);
     }
 
-    if let Some(_var_meta) = src.enums().iter().find(|v| v.name() == type_name) {
-        return Ok(Instruction::ProgramJmp {name: type_name.to_string(), ptr: 0, ret: 0});
-    }
-
-    if let Some(_struct_meta) = src.structs().iter().find(|s| s.name() == type_name) {
-        return Ok(Instruction::ProgramJmp {name: type_name.to_string(), ptr: 0, ret: 0});
+    if src.enums().iter().find(|v| v.name() == type_name).is_some() ||
+        src.structs().iter().find(|s| s.name() == type_name).is_some() {
+        return Ok(Instruction::JmpRet {
+            ptr: src.program_id_for(&type_name)
+                .ok_or(
+                    compiler_error!("Failed to resolve id of program: {}", type_name)
+                )?.clone(),
+        });
     }
 
     Err(compiler_error!("unknown or not resolved type '{}'", type_name))
@@ -335,25 +407,17 @@ fn compile_enum<
     // variant index based jump table
     for (i, _var_name) in var_meta.variants().iter().enumerate() {
         code.push(Instruction::JmpCND{
-            ptrdelta: (i + vars_count + 1) as isize,
+            ptrdelta: (i + vars_count) as isize,
             value: i as isize,
             delta: 0
         });
-    }
-
-    #[cfg(feature = "debug")]
-    {
-        // add a raise immediately after jump table to guard against wrong var indexes on the stack
-        code.push(Instruction::Raise { ex: crate::Exception::VariantIndexNotInJumpTable });
     }
 
     // finally add each of the variant implementations code and their Jmp to post definition
     for (i, var_name) in var_meta.variants().iter().enumerate() {
         code.push(compile_type_ops(src, var_name, depth + 1)?);
         if vars_count - i > 1 {
-            code.push(Instruction::Jmp{
-                info: format!("end of {}", var_meta.name()), ptr: end_ptr
-            });
+            code.push(Instruction::Jmp{ptr: end_ptr});
         }
     }
 
@@ -428,10 +492,10 @@ pub fn compile_type<
 
     if let Some(var_meta) = src.enums().iter().find(|v| v.name() == type_name) {
         if program.name != var_meta.name() {
-            program.code.push(Instruction::ProgramJmp {
-                name: var_meta.name().to_string(),
-                ptr: 0,
-                ret: 0
+            program.code.push(Instruction::JmpRet {
+                ptr: src.program_id_for(var_meta.name())
+                    .ok_or(compiler_error!("Failed to resolve id of program: {}", var_meta.name()))?
+                    .clone(),
             });
             return Ok(());
         } else {
@@ -449,7 +513,9 @@ pub fn compile_type<
     }
 
     if let Some(struct_meta) = src.structs().iter().find(|s| s.name() == type_name) {
-        for field in struct_meta.fields() {
+        for (i, field) in struct_meta.fields().iter().enumerate() {
+            program.code.push(Instruction::Field(i));
+            program.strings.push(field.name().to_string());
             match instruction_for!(field.type_name()) {
                 Some(op) => program.code.push(op),
                 None => {
@@ -468,11 +534,11 @@ pub fn compile_program<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S>,
+    Source: SourceCode<A, T, E, S> + Debug,
 >(
     src: &Source,
     program_name: String,
-    namespace: &mut ProgramNamespace
+    namespace: &mut ProgramNamespace<A, T, E, S, Source>,
 ) -> Result<(), TypeCompileError> {
     debug_log!("\tCompile program: {}", program_name);
 
@@ -484,7 +550,7 @@ pub fn compile_program<
         return Ok(())
     }
 
-    let mut program = namespace.get_program_or_init(&program_name);
+    let mut program = namespace.get_program_or_init(&program_name)?;
 
     compile_type(src, &program_name, &mut program)
         .map_err(|e| compiler_error!(
@@ -492,25 +558,32 @@ pub fn compile_program<
             program_name, e.to_string())
         )?;
 
-    if !src.is_variant(&program_name) {
-        program.code.insert(0, Instruction::PushCND(2));
-    }
+    let ctype = if src.is_variant(&program_name) {
+        1u8
+    } else {
+        2u8
+    };
+
+    program.code.insert(
+        0,
+        Instruction::Section(
+            ctype,
+            program.id
+        )
+    );
 
     // gather dependencies
     for op in program.code.iter() {
         match op {
-            Instruction::ProgramJmp {
-                name, ptr: _, ret: _
+            Instruction::JmpRet {
+                ptr: id
             } => {
-                program.deps.insert(name.clone());
+                program.deps.insert(*id);
             },
             _ => ()
         }
     }
 
-    if !src.is_variant(&program_name) {
-        program.code.push(Instruction::PopCND);
-    }
     program.code.push(Instruction::Exit);
     program.base_size = program.code.iter()
         .map(|op| payload_base_size_of(op))
@@ -523,11 +596,11 @@ pub fn compile_source<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S>,
+    Source: SourceCode<A, T, E, S> + Debug,
 >(
     src: &Source,
-) -> Result<ProgramNamespace, TypeCompileError> {
-    let mut ns = ProgramNamespace::default();
+) -> Result<ProgramNamespace<A, T, E, S, Source>, TypeCompileError> {
+    let mut ns = ProgramNamespace::from_source(src);
     debug_log!("Compile source structs...");
     for struct_meta in src.structs() {
         compile_program(
@@ -545,6 +618,8 @@ pub fn compile_source<
             &mut ns
         )?;
     }
+
+    ns.calculate_string_map();
 
     Ok(ns)
 }

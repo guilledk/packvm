@@ -46,6 +46,7 @@ Any other type should be able to be represented by a sequence of these types
 
  */
 use std::cmp::PartialEq;
+use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::mem::discriminant;
@@ -87,7 +88,7 @@ pub enum Value {
     Bytes(Vec<u8>),
 
     Array(Vec<Value>),
-    Struct(String, Vec<(String, Value)>),
+    Struct(String, HashMap<String, Value>),
 }
 
 
@@ -271,9 +272,7 @@ impl fmt::Display for Value {
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Instruction {
-    // io stack manipulation
-    // pack a value of specific type poping it from the io stack
-    // or unpack a value from the source bytes buffer to the io stack
+    // IO manipulation, what to pack/unpack next
     Bool,
     UInt{ size: u8 },
     Int{ size: u8 },
@@ -282,42 +281,52 @@ pub enum Instruction {
     Float{ size: u8 },
     Bytes,  // bytes with LEB128 encoded size first
     BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
-    // these modify how the next instructions are handled
-    Optional,
-    Extension,
 
-    // push condition from io stack into condition stack
+    Optional,  // next value is optional, encode a flag as a u8 before
+    Extension,  // extensions are like optionals but they dont encode a flag in a u8
+
+    // structure marks
+
+    Section(  // indicates a new program section
+        u8,  // struct type: 1 = enum, 2 = struct
+        usize  // program id
+    ),
+
+    Field(usize),  // indicate field name string id for next value
+
+    // push condition from io into condition stack
+    // param is cnd type, 0 = array len, 1 = enum variant
     PushCND(u8),
+
     // discard condition from stack
     PopCND,
 
     // jumps
-    Jmp { info: String, ptr: usize },  // absolute jmp
-    JmpRet{ info: String, ptr: usize },
-    ProgramJmp { name: String, ptr: usize, ret: usize },
+    Jmp { ptr: usize },  // absolute jmp
 
-    // conditional jumps based on first value on program stack
-    JmpCND{ ptrdelta: isize, value: isize, delta: isize },  // target ptr, condition value, cnd delta to apply
-    JmpNotCND{ ptrdelta: isize, value: isize, delta: isize },  // target ptr, condition value, cnd delta to apply
+    // perform absolute jmp and return on next Exit instruction
+    JmpRet{ ptr: usize },
 
-    // used to indicate a program shouldn't reach this instruction
-    Raise{ ex: Exception },
 
-    // stop the runtime
+    // conditional jumps based on first value on condition stack
+
+    // ptrdelta: ip delta to apply if top cnd stack == value
+    // value: condition value to check for
+    // delta: delta to apply to top cnd stack value if != value
+    JmpCND{ ptrdelta: isize, value: isize, delta: isize },
+
+    // ptrdelta: ip delta to apply if top cnd stack != value
+    // value: condition value to check for
+    // delta: delta to apply to top cnd stack value if == value
+    JmpNotCND{ ptrdelta: isize, value: isize, delta: isize },  // ip delta to apply, condition value, cnd delta to apply
+
+    // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,
-
-    // assembly
-    Section(String)
 }
 
 impl Instruction {
     pub fn validate_asm(src: &Instruction, dst: &Instruction) -> bool {
-        match (src, dst) {
-            (Instruction::ProgramJmp {..}, Instruction::JmpRet { .. }) => true,
-            _ => {
-                discriminant(src) == discriminant(dst)
-            }
-        }
+        discriminant(src) == discriminant(dst)
     }
 }
 
