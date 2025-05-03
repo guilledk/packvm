@@ -85,7 +85,8 @@ pub enum Instruction {
     VarInt,
     Float{ size: u8 },
     Bytes,  // bytes with LEB128 encoded size first
-    BytesRaw{ size: u8 },  // raw bytes, if param is > 0 do size check on stack value
+    BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
+    String,  // utf-8 string with LEB128 encoded len
 
     Optional,  // next value is optional, encode a flag as a u8 before
     Extension,  // extensions are like optionals but they dont encode a flag in a u8
@@ -127,5 +128,4 @@ pub enum Instruction {
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,
 }
-
 ```

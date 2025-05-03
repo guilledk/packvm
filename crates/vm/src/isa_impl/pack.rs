@@ -408,7 +408,8 @@ pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), Pac
                 exec(vm, io, buffer)
             }
         }
-        Instruction::Section(ctype, name) => { section!(vm, ctype, name); exec(vm, io, buffer) },
+        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
+        Instruction::Section(ctype, id) => { section!(vm, ctype, id); exec(vm, io, buffer) },
         Instruction::Field(name) => { field!(vm, name); exec(vm, io, buffer) },
     }
 }

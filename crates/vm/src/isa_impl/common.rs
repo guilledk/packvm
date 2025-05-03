@@ -99,9 +99,6 @@ macro_rules! jmpret {
 #[macro_export]
 macro_rules! section {
     ($vm:ident, $ctype:expr, $id:expr) => {{
-        let fname = $vm.executable.str_map.get_by_left(&$id)
-            .ok_or(crate::packer_error!("Failed to resolve struct name from section id: {}", $id))?;
-
         $vm.ionsp.push(NamespacePart::StructNode($ctype));
         $vm.ip += 1;
 
@@ -109,7 +106,9 @@ macro_rules! section {
             $vm,
             "section",
             "({}, {})",
-            $ctype, fname
+            $ctype,
+            $vm.executable.str_map.get_by_left(&$id)
+                .ok_or(crate::packer_error!("Failed to resolve struct name from section id: {}", $id))?
         );
     }};
 }

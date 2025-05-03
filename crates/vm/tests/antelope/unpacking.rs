@@ -108,7 +108,7 @@ fn test_unpack_bytes() {
 fn test_unpack_string() {
     let mut enc = Encoder::new(0);
     "abc".to_string().pack(&mut enc);
-    unpack_and_assert!("string", enc.get_bytes(), Value::Bytes(vec![b'a', b'b', b'c']));
+    unpack_and_assert!("string", enc.get_bytes(), Value::String("abc".to_string()));
 }
 
 #[test]

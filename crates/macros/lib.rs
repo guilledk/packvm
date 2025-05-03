@@ -4,6 +4,7 @@ use syn::{
     parse_macro_input, Data, DeriveInput, Fields, Attribute, Lit, LitStr, Meta, MetaNameValue,
 };
 
+#[allow(dead_code)]
 fn vm_name_attr(attrs: &[Attribute], default: &str) -> LitStr {
     for attr in attrs {
         if attr.path.is_ident("vm_name") {

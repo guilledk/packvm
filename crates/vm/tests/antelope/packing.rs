@@ -98,7 +98,7 @@ fn test_pack_string() {
     "abc".to_string().pack(&mut enc);
     pack_and_assert!(
         "string",
-        Value::Bytes(vec![b'a', b'b', b'c']),
+        Value::String("abc".to_string()),
         enc.get_bytes()
     );
 }

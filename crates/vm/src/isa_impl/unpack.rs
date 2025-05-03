@@ -354,7 +354,8 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
                 exec(vm, buffer)
             }
         }
-        Instruction::Section(ctype, name) => { section!(vm, ctype, name); exec(vm, buffer) },
+        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
+        Instruction::Section(ctype, id) => { section!(vm, ctype, id); exec(vm, buffer) },
         Instruction::Field(name) => { field!(vm, name); exec(vm, buffer) },
     }
 }
