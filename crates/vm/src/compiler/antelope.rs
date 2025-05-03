@@ -278,3 +278,12 @@ where
         }
     }
 }
+
+impl From<BinaryExtension<u128>> for Value {
+    fn from(value: BinaryExtension<u128>) -> Value {
+        match value.value() {
+            Some(v) => v.clone().into(),
+            None    => Value::None,
+        }
+    }
+}

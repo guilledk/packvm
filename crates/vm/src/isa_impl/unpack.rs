@@ -12,6 +12,7 @@ use crate::{
     Instruction,
     PackVM
 };
+use crate::utils::numbers::{Float, Integer, Long};
 
 #[cfg(feature = "debug")]
 macro_rules! vmlog {
@@ -112,40 +113,6 @@ macro_rules! vmunpack {
     }}
 }
 
-macro_rules! impl_unpack_op {
-    ($( ($fname:ident, $ty:ident, $variant:ident, $dbg:literal) ),* $(,)?) => {$(
-        #[inline(always)]
-        pub fn $fname(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
-            let buf = vmunpack!(vm, buffer, size_of::<$ty>());
-            let num = $ty::from_le_bytes(
-                buf.try_into()
-                    .map_err(|e| packer_error!("while unpacking {}: {}", stringify!($ty), e))?,
-            );
-            vmsetio!(vm, Value::$variant(num));
-            vmstep!(vm);
-            vmlog!(vm, $dbg, "()");
-            Ok(())
-        }
-    )*};
-}
-
-impl_unpack_op!(
-    (uint8,   u8,       Uint8,   "uint8"),
-    (uint16,  u16,      Uint16,  "uint16"),
-    (uint32,  u32,      Uint32,  "uint32"),
-    (uint64,  u64,      Uint64,  "uint64"),
-    (uint128, u128,     Uint128, "uint128"),
-
-    (int8,    i8,       Int8,    "int8"),
-    (int16,   i16,      Int16,   "int16"),
-    (int32,   i32,      Int32,   "int32"),
-    (int64,   i64,      Int64,   "int64"),
-    (int128,  i128,     Int128,  "int128"),
-
-    (float32, f32,      Float32, "float32"),
-    (float64, f64,      Float64, "float64"),
-);
-
 #[inline(always)]
 pub fn boolean(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
     let b = match buffer[vm.bp] {
@@ -163,6 +130,88 @@ pub fn boolean(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
     vm.bp += 1;
     vmstep!(vm);
     vmlog!(vm, "bool", "()");
+    Ok(())
+}
+
+#[inline(always)]
+pub fn integer(vm: &mut PackVM, buffer: &[u8], size: u8, signed: bool) -> Result<(), PackerError> {
+    let buf = vmunpack!(vm, buffer, size as usize);
+    let val = if signed {
+        match size {
+            1 => {
+                let num = i8::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            2 => {
+                let num = i16::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            4 => {
+                let num = i32::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            8 => {
+                let num = i64::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            _ => unreachable!()
+        }
+    } else {
+        match size {
+            1 => {
+                let num = u8::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            2 => {
+                let num = u16::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            4 => {
+                let num = u32::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            8 => {
+                let num = u64::from_le_bytes(buf.try_into().unwrap());
+                Value::Int(Integer::from(num))
+            }
+            _ => unreachable!()
+        }
+    };
+    vmsetio!(vm, val);
+    vmstep!(vm);
+    vmlog!(vm, "integer", "({}, {})", size, signed);
+    Ok(())
+}
+
+#[inline(always)]
+pub fn long(vm: &mut PackVM, buffer: &[u8], signed: bool) -> Result<(), PackerError> {
+    let buf = vmunpack!(vm, buffer, 16);
+    let val = if signed {
+        let num = i128::from_le_bytes(buf.try_into().unwrap());
+        Value::Long(Long::from(num))
+    } else {
+        let num = u128::from_le_bytes(buf.try_into().unwrap());
+        Value::Long(Long::from(num))
+    };
+    vmsetio!(vm, val);
+    vmstep!(vm);
+    vmlog!(vm, "long", "({})", signed);
+    Ok(())
+}
+
+#[inline(always)]
+pub fn float(vm: &mut PackVM, buffer: &[u8], size: u8) -> Result<(), PackerError> {
+    let buf = vmunpack!(vm, buffer, size as usize);
+    let val = if size == 4 {
+        let num = f32::from_le_bytes(buf.try_into().unwrap());
+        Value::Float(Float::from(num))
+    } else {
+        let num = f64::from_le_bytes(buf.try_into().unwrap());
+        Value::Float(Float::from(num))
+    };
+    vmsetio!(vm, val);
+    vmstep!(vm);
+    vmlog!(vm, "float", "({})", size);
     Ok(())
 }
 
@@ -282,7 +331,7 @@ pub fn pushcnd(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
             let val = vmgetio!(vm);
             match val {
                 Value::Struct(values) => {
-                    values.insert("type".to_string(), Value::Uint32(cnd.0));
+                    values.insert("type".to_string(), Value::Int(Integer::from(cnd.0)));
                 }
                 _ => return Err(packer_error!("expected struct to be target value but got: {}", val)),
             }
@@ -300,35 +349,29 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
     match vm.executable.code[vm.ip] {
         Instruction::Bool => { boolean(vm, buffer).map_err(|e| packer_error!("{}\nVM state: {:?}", e.to_string(), vm.ionsp))?; exec(vm, buffer) }
 
-        Instruction::UInt{ size} => {
-            match size {
-                1 => { uint8(vm, buffer)?; exec(vm, buffer) }
-                2 => { uint16(vm, buffer)?; exec(vm, buffer) }
-                4 => { uint32(vm, buffer)?; exec(vm, buffer) }
-                8 => { uint64(vm, buffer)?; exec(vm, buffer) }
-                16 => { uint128(vm, buffer)?; exec(vm, buffer) }
-                _ => unreachable!()
-            }
+        Instruction::UInt {size} => {
+            if size == 16 {
+                long(vm, buffer, false)?
+            } else {
+                integer(vm, buffer, size, false)?
+            };
+            exec(vm, buffer)
         }
-
-        Instruction::Int{ size} => {
-            match size {
-                1 => { int8(vm, buffer)?; exec(vm, buffer) }
-                2 => { int16(vm, buffer)?; exec(vm, buffer) }
-                4 => { int32(vm, buffer)?; exec(vm, buffer) }
-                8 => { int64(vm, buffer)?; exec(vm, buffer) }
-                16 => { int128(vm, buffer)?; exec(vm, buffer) }
-                _ => unreachable!()
-            }
+        Instruction::Int {size} => {
+            if size == 16 {
+                long(vm, buffer, true)?
+            } else {
+                integer(vm, buffer, size, true)?
+            };
+            exec(vm, buffer)
         }
 
         Instruction::VarUInt => { varuint32(vm, buffer)?; exec(vm, buffer) }
         Instruction::VarInt => { varint32(vm, buffer)?; exec(vm, buffer) },
 
-        Instruction::Float { size } => {
+        Instruction::Float {size} => {
             match size {
-                4 => { float32(vm, buffer)?; exec(vm, buffer) },
-                8 => { float64(vm, buffer)?; exec(vm, buffer) },
+                4 | 8 => { float(vm, buffer, size)?; exec(vm, buffer) },
                 16 => { float128(vm, buffer)?; exec(vm, buffer) },
                 _ => unreachable!()
             }

@@ -23,6 +23,7 @@ use packvm::{
     compile_source,
     assemble
 };
+use packvm::utils::numbers::{Float, Integer, Long};
 use packvm_macros::{VMStruct, VMEnum};
 
 const TESTABI: &str = include_str!("test_abi.json");
@@ -43,40 +44,42 @@ macro_rules! pack_and_assert {
         assert_eq!(encoded, $expected);
     }};
 }
+
 #[test]
 fn test_pack_bool() {
-    pack_and_assert!("bool", Value::Bool(true), &[1u8]);
+    pack_and_assert!("bool", Value::Bool(true),  &[1u8]);
     pack_and_assert!("bool", Value::Bool(false), &[0u8]);
 }
 
 #[test]
 fn test_pack_uints() {
-    pack_and_assert!("uint8", Value::Uint8(0x12), &[0x12]);
-    pack_and_assert!("uint16", Value::Uint16(0x1234), &[0x34, 0x12]);
-    pack_and_assert!("uint32", Value::Uint32(0x12345678), &[0x78, 0x56, 0x34, 0x12]);
-    pack_and_assert!("uint64", Value::Uint64(0x1234567890abcdef), &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12]);
-    pack_and_assert!("uint128", Value::Uint128(0x112233445566778899aabbccddeeff00u128), &0x112233445566778899aabbccddeeff00u128.to_le_bytes());
+    pack_and_assert!("uint8",   Value::Int(Integer::from(0x12u8)),                     &[0x12]);
+    pack_and_assert!("uint16",  Value::Int(Integer::from(0x1234u16)),                  &[0x34, 0x12]);
+    pack_and_assert!("uint32",  Value::Int(Integer::from(0x12345678u32)),              &[0x78, 0x56, 0x34, 0x12]);
+    pack_and_assert!("uint64",  Value::Int(Integer::from(0x1234567890abcdefu64)),      &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12]);
+    pack_and_assert!("uint128", Value::Long(Long::from(0x112233445566778899aabbccddeeff00u128)),
+                     &0x112233445566778899aabbccddeeff00u128.to_le_bytes());
 }
 
 #[test]
 fn test_pack_ints() {
-    pack_and_assert!("int8", Value::Int8(-1), &[0xff]);
-    pack_and_assert!("int16", Value::Int16(-2), &[0xfe, 0xff]);
-    pack_and_assert!("int32", Value::Int32(-3), &[0xfd, 0xff, 0xff, 0xff]);
-    pack_and_assert!("int64", Value::Int64(-4), &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-    pack_and_assert!("int128", Value::Int128(-5), &(-5i128).to_le_bytes());
+    pack_and_assert!("int8",   Value::Int(Integer::from(-1i8)),   &[0xff]);
+    pack_and_assert!("int16",  Value::Int(Integer::from(-2i16)),  &[0xfe, 0xff]);
+    pack_and_assert!("int32",  Value::Int(Integer::from(-3i32)),  &[0xfd, 0xff, 0xff, 0xff]);
+    pack_and_assert!("int64",  Value::Int(Integer::from(-4i64)),  &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    pack_and_assert!("int128", Value::Long(Long::from(-5i128)),   &(-5i128).to_le_bytes());
 }
 
 #[test]
 fn test_pack_varuint32() {
-    pack_and_assert!("varuint32", Value::VarUInt32(0x7F), &[0x7F]);
-    pack_and_assert!("varuint32", Value::VarUInt32(0x80), &[0x80, 0x01]);
+    pack_and_assert!("varuint32", Value::VarUInt32(0x7Fu32), &[0x7F]);
+    pack_and_assert!("varuint32", Value::VarUInt32(0x80u32), &[0x80, 0x01]);
 }
 
 #[test]
 fn test_pack_floats() {
-    pack_and_assert!("float32", Value::Float32(1.0f32), &1.0f32.to_le_bytes());
-    pack_and_assert!("float64", Value::Float64(2.0f64), &2.0f64.to_le_bytes());
+    pack_and_assert!("float32", Value::Float(Float::from(1.0f32)), &1.0f32.to_le_bytes());
+    pack_and_assert!("float64", Value::Float(Float::from(2.0f64)), &2.0f64.to_le_bytes());
     pack_and_assert!("float128", Value::Float128([1u8; 16]), &[1u8; 16]);
 }
 
@@ -85,32 +88,24 @@ fn test_pack_bytes() {
     let mut enc = Encoder::new(0);
     let raw = vec![1u8, 2u8, 3u8];
     raw.pack(&mut enc);
-    pack_and_assert!(
-        "bytes",
-        Value::Bytes(raw),
-        enc.get_bytes()
-    );
+    pack_and_assert!("bytes", Value::Bytes(raw), enc.get_bytes());
 }
 
 #[test]
 fn test_pack_string() {
     let mut enc = Encoder::new(0);
     "abc".to_string().pack(&mut enc);
-    pack_and_assert!(
-        "string",
-        Value::String("abc".to_string()),
-        enc.get_bytes()
-    );
+    pack_and_assert!("string", Value::String("abc".to_string()), enc.get_bytes());
 }
 
 #[test]
 fn test_pack_array() {
     let mut enc = Encoder::new(0);
-    let actual: Vec<u32> = vec![1, 2];
+    let actual = vec![1u32, 2u32];
     actual.pack(&mut enc);
     pack_and_assert!(
         "uint32[]",
-        Value::Array(vec![Value::Uint32(1), Value::Uint32(2)]),
+        Value::Array(vec![Integer::from(1u32).into(), Integer::from(2u32).into()]),
         enc.get_bytes()
     );
 }
@@ -119,7 +114,7 @@ fn test_pack_array() {
 fn test_pack_option() {
     let mut enc = Encoder::new(0);
     Some(1u32).pack(&mut enc);
-    pack_and_assert!("uint32?", Value::Uint32(1), enc.get_bytes());
+    pack_and_assert!("uint32?", Value::Int(Integer::from(1u32)), enc.get_bytes());
 
     let mut enc = Encoder::new(0);
     None::<u32>.pack(&mut enc);
@@ -128,7 +123,7 @@ fn test_pack_option() {
 
 #[test]
 fn test_pack_extension() {
-    pack_and_assert!("uint32$", Value::Uint32(1), &[1, 0, 0, 0]);
+    pack_and_assert!("uint32$", Value::Int(Integer::from(1u32)), &[1, 0, 0, 0]);
 
     let empty: [u8; 0] = [];
     pack_and_assert!("uint32$", Value::None, &empty);

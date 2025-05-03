@@ -16,7 +16,7 @@ use crate::{
 
 macro_rules! type_mismatch {
     ($expected:expr, $got:ident) => {
-        Err(packer_error!("Expected {}, got {}", $expected, $got))
+        Err(packer_error!("Expected {}, got {:?}", $expected, $got))
     };
 }
 
@@ -112,44 +112,103 @@ macro_rules! vmpack {
     };
 }
 
-macro_rules! impl_pack_op {
-    ($( ($fname:ident, $variant:ident, $dbg:literal) ),* $(,)?) => {$(
-        #[inline(always)]
-        pub fn $fname(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-            let val = vmgetio_expect!(vm, io, $variant);
-            match val {
-                Value::$variant(v) => {
-                    vmpack!(
-                        vm,
-                        buffer,
-                        v.to_le_bytes().as_ref()
-                    );
-                    vmstep!(vm);
+#[inline(always)]
+pub fn integer(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, size: u8, signed: bool) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Int);
+    match val {
+        Value::Int(num) => {
+            if signed {
+                match size {
+                    1 => {
+                        let num = num.as_i64().unwrap() as i8;
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    2 => {
+                        let num = num.as_i64().unwrap() as i16;
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    4 => {
+                        let num = num.as_i64().unwrap() as i32;
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    8 => {
+                        let num = num.as_i64().unwrap();
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    _ => unreachable!(),
                 }
-                _ => { return type_mismatch!(stringify!($variant), val) },
+            } else {
+                match size {
+                    1 => {
+                        let num = num.as_u64().unwrap() as u8;
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    2 => {
+                        let num = num.as_u64().unwrap() as u16;
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    4 => {
+                        let num = num.as_u64().unwrap() as u32;
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    8 => {
+                        let num = num.as_u64().unwrap();
+                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                    }
+                    _ => unreachable!(),
+                }
             }
-            vmlog!(vm, $dbg, "()");
-            Ok(())
         }
-    )*};
+        _ => return type_mismatch!("Int", val)
+    }
+    vmstep!(vm);
+    vmlog!(vm, "int", "({}, {})", size, signed);
+    Ok(())
 }
 
-impl_pack_op!(
-    (uint8,    Uint8,   "uint8"),
-    (uint16,   Uint16,  "uint16"),
-    (uint32,   Uint32,  "uint32"),
-    (uint64,   Uint64,  "uint64"),
-    (uint128,  Uint128, "uint128"),
+#[inline(always)]
+pub fn long(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, signed: bool) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Long);
+    match val {
+        Value::Long(num) => {
+            if signed {
+                let num = num.as_i128().unwrap();
+                vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+            } else {
+                let num = num.as_u128().unwrap();
+                vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+            }
+        }
+        _ => return type_mismatch!("Long", val)
+    }
+    vmstep!(vm);
+    vmlog!(vm, "long", "({})", signed);
+    Ok(())
+}
 
-    (int8,     Int8,    "int8"),
-    (int16,    Int16,   "int16"),
-    (int32,    Int32,   "int32"),
-    (int64,    Int64,   "int64"),
-    (int128,   Int128,  "int128"),
-
-    (float32,  Float32, "float32"),
-    (float64,  Float64, "float64"),
-);
+#[inline(always)]
+pub fn float(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, size: u8) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Float);
+    match val {
+        Value::Float(num) => {
+            match size {
+                4 => {
+                    let num: f32 = num.as_f32().unwrap();
+                    vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                }
+                8 => {
+                    let num: f64 = num.as_f64();
+                    vmpack!(vm, buffer, num.to_le_bytes().as_ref());
+                }
+                _ => unreachable!(),
+            }
+        }
+        _ => return type_mismatch!("Int", val)
+    }
+    vmstep!(vm);
+    vmlog!(vm, "float", "({})", size);
+    Ok(())
+}
 
 const TRUE_BYTES: [u8; 1] = [1u8];
 const FALSE_BYTES: [u8; 1] = [0u8];
@@ -322,8 +381,8 @@ pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> 
                 .ok_or(packer_error!("Cant find type field in enum struct: {:?}", fields))?;
 
             match type_field {
-                Value::Uint32(cnd) => {
-                    *cnd
+                Value::Int(cnd) => {
+                    cnd.as_u64().unwrap() as u32
                 }
                 _ => return type_mismatch!("Enum variant id Value::UInt32", val)
             }
@@ -355,25 +414,20 @@ pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), Pac
         Instruction::Bool => { boolean(vm, io, buffer)?; exec(vm, io, buffer) }
 
         Instruction::UInt {size} => {
-            match size {
-                1 => { uint8(vm, io, buffer)?; exec(vm, io, buffer) },
-                2 => { uint16(vm, io, buffer)?; exec(vm, io, buffer) },
-                4 => { uint32(vm, io, buffer)?; exec(vm, io, buffer) },
-                8 => { uint64(vm, io, buffer)?; exec(vm, io, buffer) },
-                16 => { uint128(vm, io, buffer)?; exec(vm, io, buffer) },
-                _ => unreachable!()
-            }
+            if size == 16 {
+                long(vm, io, buffer, false)?
+            } else {
+                integer(vm, io, buffer, size, false)?
+            };
+            exec(vm, io, buffer)
         }
-
         Instruction::Int {size} => {
-            match size {
-                1 => { int8(vm, io, buffer)?; exec(vm, io, buffer) },
-                2 => { int16(vm, io, buffer)?; exec(vm, io, buffer) },
-                4 => { int32(vm, io, buffer)?; exec(vm, io, buffer) },
-                8 => { int64(vm, io, buffer)?; exec(vm, io, buffer) },
-                16 => { int128(vm, io, buffer)?; exec(vm, io, buffer) },
-                _ => unreachable!()
-            }
+            if size == 16 {
+                long(vm, io, buffer, true)?
+            } else {
+                integer(vm, io, buffer, size, true)?
+            };
+            exec(vm, io, buffer)
         }
 
         Instruction::VarUInt => { varuint32(vm, io, buffer)?; exec(vm, io, buffer) }
@@ -381,8 +435,7 @@ pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), Pac
 
         Instruction::Float {size} => {
             match size {
-                4 => { float32(vm, io, buffer)?; exec(vm, io, buffer) },
-                8 => { float64(vm, io, buffer)?; exec(vm, io, buffer) },
+                4 | 8 => { float(vm, io, buffer, size)?; exec(vm, io, buffer) },
                 16 => { float128(vm, io, buffer)?; exec(vm, io, buffer) },
                 _ => unreachable!()
             }

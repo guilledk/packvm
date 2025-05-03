@@ -1,4 +1,5 @@
 pub mod varint;
+pub mod numbers;
 
 #[macro_export]
 #[cfg(feature = "debug")]

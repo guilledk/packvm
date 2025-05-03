@@ -8,7 +8,6 @@ pub mod isa;
 pub use isa::{
     Value,
     Instruction,
-    Exception,
 };
 
 mod isa_impl;

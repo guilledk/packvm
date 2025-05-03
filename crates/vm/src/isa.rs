@@ -50,39 +50,23 @@ use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::mem::discriminant;
+use crate::utils::numbers::{Float, Integer, Long};
 use crate::utils::varint::{VarInt32, VarUInt32};
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Exception {
-    VariantIndexNotInJumpTable,
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     None,
     Bool(bool),
 
-    // unsigned
-    Uint8 (u8),
-    Uint16(u16),
-    Uint32(u32),
-    Uint64(u64),
-    Uint128(u128),
-
-    // signed
-    Int8 (i8),
-    Int16(i16),
-    Int32(i32),
-    Int64(i64),
-    Int128(i128),
+    Int(Integer),
+    Long(Long),
 
     // var-len encoded integers
     VarUInt32(u32),
     VarInt32(i32),
 
     // floats
-    Float32(f32),
-    Float64(f64),
+    Float(Float),
     Float128([u8; 16]),
 
     Bytes(Vec<u8>),
@@ -93,97 +77,126 @@ pub enum Value {
 }
 
 
-#[macro_export]
-macro_rules! value_payload_size {
-    ($value:expr) => {
-        match $value {
-            Value::Bool(_) => 1,
+// #[macro_export]
+// macro_rules! value_payload_size {
+//     ($value:expr) => {
+//         match $value {
+//             Value::Bool(_) => 1,
+//
+//             Value::Uint8(_) => 1,
+//             Value::Uint16(_) => 2,
+//             Value::Uint32(_) => 4,
+//             Value::Uint64(_) => 8,
+//             Value::Uint128(_) => 16,
+//
+//             Value::Int8(_) => 1,
+//             Value::Int16(_) => 2,
+//             Value::Int32(_) => 4,
+//             Value::Int64(_) => 8,
+//             Value::Int128(_) => 16,
+//
+//             Value::VarUInt32(v) => {
+//                 if *v < 0x80 { 1 }
+//                 else if *v < 0x4000 { 2 }
+//                 else if *v < 0x200000 { 3 }
+//                 else if *v < 0x10000000 { 4 }
+//                 else { 5 }
+//             },
+//             Value::VarInt32(v) => {
+//                 let zigzag = ((*v << 1) ^ (*v >> 31)) as u32;
+//                 if zigzag < 0x80 { 1 }
+//                 else if zigzag < 0x4000 { 2 }
+//                 else if zigzag < 0x200000 { 3 }
+//                 else if zigzag < 0x10000000 { 4 }
+//                 else { 5 }
+//             },
+//
+//             Value::Float32(_) => 4,
+//             Value::Float64(_) => 8,
+//             Value::Float128(_) => 16,
+//
+//             Value::Bytes(ref v) => {
+//                 let len = v.len();
+//                 let len_prefix_size = if len < 0x80 { 1 }
+//                     else if len < 0x4000 { 2 }
+//                     else if len < 0x200000 { 3 }
+//                     else if len < 0x10000000 { 4 }
+//                     else { 5 };
+//                 len_prefix_size + len
+//             },
+//
+//             Value::Array(v) => {
+//                 let v = v.len() as u32;
+//                 if v < 0x80 { 1 }
+//                 else if v < 0x4000 { 2 }
+//                 else if v < 0x200000 { 3 }
+//                 else if v < 0x10000000 { 4 }
+//                 else { 5 }
+//             }
+//
+//             _ => 0
+//         }
+//     };
+// }
 
-            Value::Uint8(_) => 1,
-            Value::Uint16(_) => 2,
-            Value::Uint32(_) => 4,
-            Value::Uint64(_) => 8,
-            Value::Uint128(_) => 16,
+// #[macro_export]
+// macro_rules! payload_size {
+//     ($values:expr) => {{
+//         let mut total_size = 0;
+//         for val in $values {
+//             total_size += crate::value_payload_size!(val);
+//         }
+//         total_size
+//     }};
+// }
 
-            Value::Int8(_) => 1,
-            Value::Int16(_) => 2,
-            Value::Int32(_) => 4,
-            Value::Int64(_) => 8,
-            Value::Int128(_) => 16,
-
-            Value::VarUInt32(v) => {
-                if *v < 0x80 { 1 }
-                else if *v < 0x4000 { 2 }
-                else if *v < 0x200000 { 3 }
-                else if *v < 0x10000000 { 4 }
-                else { 5 }
-            },
-            Value::VarInt32(v) => {
-                let zigzag = ((*v << 1) ^ (*v >> 31)) as u32;
-                if zigzag < 0x80 { 1 }
-                else if zigzag < 0x4000 { 2 }
-                else if zigzag < 0x200000 { 3 }
-                else if zigzag < 0x10000000 { 4 }
-                else { 5 }
-            },
-
-            Value::Float32(_) => 4,
-            Value::Float64(_) => 8,
-            Value::Float128(_) => 16,
-
-            Value::Bytes(ref v) => {
-                let len = v.len();
-                let len_prefix_size = if len < 0x80 { 1 }
-                    else if len < 0x4000 { 2 }
-                    else if len < 0x200000 { 3 }
-                    else if len < 0x10000000 { 4 }
-                    else { 5 };
-                len_prefix_size + len
-            },
-
-            Value::Array(v) => {
-                let v = v.len() as u32;
-                if v < 0x80 { 1 }
-                else if v < 0x4000 { 2 }
-                else if v < 0x200000 { 3 }
-                else if v < 0x10000000 { 4 }
-                else { 5 }
-            }
-
-            _ => 0
-        }
-    };
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::Bool(value)
+    }
 }
 
-#[macro_export]
-macro_rules! payload_size {
-    ($values:expr) => {{
-        let mut total_size = 0;
-        for val in $values {
-            total_size += crate::value_payload_size!(val);
-        }
-        total_size
-    }};
+impl<T: Into<Integer>> From<T> for Value {
+    fn from(value: T) -> Self {
+        Value::Int(value.into())
+    }
 }
 
-macro_rules! impl_value_from {
-    ($( ($src:ty, $dst:ident) ),* $(,)?) => {
-        $(impl From<$src> for Value {
-            #[inline] fn from(v: $src) -> Self { Value::$dst(v) }
-        })*
-
-        $(impl From<&$src> for Value {
-            #[inline] fn from(v: &$src) -> Self { Value::$dst(*v) }
-        })*
-    };
+impl From<u128> for Value {
+    fn from(value: u128) -> Self {
+        Value::Long(value.into())
+    }
 }
 
-impl_value_from!(
-    (bool, Bool),
-    (u8, Uint8), (u16, Uint16), (u32, Uint32), (u64, Uint64), (u128, Uint128),
-    (i8, Int8), (i16, Int16), (i32, Int32), (i64, Int64), (i128, Int128),
-    (f32, Float32), (f64, Float64)
-);
+impl From<i128> for Value {
+    fn from(value: i128) -> Self {
+        Value::Long(value.into())
+    }
+}
+
+impl From<Long> for Value {
+    fn from(value: Long) -> Self {
+        Value::Long(value)
+    }
+}
+
+impl From<f32> for Value {
+    fn from(value: f32) -> Self {
+        Value::Float(value.into())
+    }
+}
+
+impl From<f64> for Value {
+    fn from(value: f64) -> Self {
+        Value::Float(value.into())
+    }
+}
+
+impl From<Float> for Value {
+    fn from(value: Float) -> Self {
+        Value::Float(value)
+    }
+}
 
 impl From<String> for Value {
     fn from(s: String) -> Self {
@@ -249,23 +262,13 @@ impl fmt::Display for Value {
             Value::None => write!(f, "None"),
             Value::Bool(v) => write!(f, "{}", v),
 
-            Value::Uint8(v) => write!(f, "{}", v),
-            Value::Uint16(v) => write!(f, "{}", v),
-            Value::Uint32(v) => write!(f, "{}", v),
-            Value::Uint64(v) => write!(f, "{}", v),
-            Value::Uint128(v) => write!(f, "{}", v),
-
-            Value::Int8(v) => write!(f, "{}", v),
-            Value::Int16(v) => write!(f, "{}", v),
-            Value::Int32(v) => write!(f, "{}", v),
-            Value::Int64(v) => write!(f, "{}", v),
-            Value::Int128(v) => write!(f, "{}", v),
+            Value::Int(v) => write!(f, "{}", v),
+            Value::Long(v) => write!(f, "{}", v),
 
             Value::VarUInt32(v) => write!(f, "{}", v),
             Value::VarInt32(v) => write!(f, "{}", v),
 
-            Value::Float32(v) => write!(f, "{}", v),
-            Value::Float64(v) => write!(f, "{}", v),
+            Value::Float(v) => write!(f, "{}", v),
             Value::Float128(bytes) => write!(f, "Float128({:02x?})", bytes),
 
             Value::Bytes(vec) => write!(f, "Bytes({:02x?})", vec),
