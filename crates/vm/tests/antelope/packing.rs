@@ -8,6 +8,7 @@ use antelope::{
     serializer::{Encoder, Decoder, Packer, PackerError},
     EnumPacker, StructPacker
 };
+use antelope::chain::abi::ShipABI;
 use packvm::{
     PackVM,
     Value,
@@ -220,4 +221,48 @@ fn test_pack_struct() {
     let mut vm = PackVM::from_executable(code);
     let encoded = vm.run_pack(pid, &val).expect("Pack failed");
     assert_eq!(encoded, enc.get_bytes());
+}
+
+const STDABI: &str = include_str!("std_abi.json");
+
+#[test]
+fn test_pack_get_status_request_v0() {
+
+    #[derive(Default, Serialize, PartialEq, Debug, VMStruct)]
+    #[vm_name = "get_status_request_v0"]
+    struct GetStatusRequestV0;
+    impl Packer for GetStatusRequestV0 {
+        fn size(&self) -> usize {
+            0
+        }
+
+        fn pack(&self, _enc: &mut Encoder) -> usize {
+            0
+        }
+
+        fn unpack(&mut self, _data: &[u8]) -> Result<usize, antelope::serializer::PackerError> {
+            Ok(0)
+        }
+    }
+
+    #[derive(Serialize, PartialEq, Debug, EnumPacker, VMEnum)]
+    #[vm_name = "request"]
+    enum Request {
+        GetStatus(GetStatusRequestV0),
+    }
+
+    let test = Request::GetStatus(GetStatusRequestV0);
+    let input: Value = test.into();
+
+    println!("{:?}", input);
+
+    let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src.program_id_for("request").expect("failed to get program");
+    let mut vm = PackVM::from_executable(code);
+    let encoded = vm.run_pack(pid, &input).expect("Pack failed");
+    println!("{:?}", encoded);
 }

@@ -251,7 +251,5 @@ fn test_unpack_result() {
     let pid = src.program_id_for("result").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
-
-    println!("{:#?}", decoded);
+    let _decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
 }

@@ -72,6 +72,7 @@ impl PackVM {
         self.ip = program;
 
         debug_log!("Running pack program: {}", program);
+        debug_log!("Input: {:#?}", io);
 
         pack::exec(self, io, &mut buffer)?;
 
@@ -88,6 +89,8 @@ impl PackVM {
         debug_log!("Running unpack program: {}", program);
 
         unpack::exec(self, buffer)?;
+
+        debug_log!("Output: {:#?}", &self.io);
 
         Ok(&self.io)
     }
