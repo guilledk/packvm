@@ -9,7 +9,6 @@ pub use isa::{
     Value,
     Instruction,
     Exception,
-    IOValue,
 };
 
 mod isa_impl;

@@ -1,9 +1,19 @@
-use antelope::chain::abi::{ABIResolvedType, ABITypeResolver, ABIView, AbiField, AbiStruct, AbiTypeDef, AbiVariant, ShipABI, ABI, STD_TYPES};
-use antelope::chain::binary_extension::BinaryExtension;
-use antelope::serializer::Packer;
-use crate::compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef};
-use crate::{IOValue, Value};
-use crate::utils::TypeCompileError;
+use std::collections::HashMap;
+use antelope::{
+    chain::{
+        abi::{ABIResolvedType, ABITypeResolver, ABIView, AbiField, AbiStruct, AbiTypeDef, AbiVariant, ShipABI, ABI},
+        asset::{Asset, Symbol, SymbolCode},
+        binary_extension::BinaryExtension,
+        name::Name
+    },
+    serializer::{Encoder, Packer}
+};
+use crate::{
+    compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef},
+    utils::TypeCompileError,
+    isa::STD_TYPES,
+    Value
+};
 
 impl TypeAlias for AbiTypeDef {
     fn new_type_name(&self) -> &str {
@@ -80,11 +90,20 @@ fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), 
     Ok(())
 }
 
-fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>) {
+fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<AbiStruct>) {
     for (new_type, alias_type) in [
         ("name", "u64"),
+        ("account_name", "u64"),
+
+        ("symbol", "u64"),
+        ("symbol_code", "u64"),
+
+        ("rd160", "sum160"),
         ("checksum160", "sum160"),
+
+        ("sha256", "sum256"),
         ("checksum256", "sum256"),
+
         ("checksum512", "sum512"),
 
         ("transaction_id", "sum256"),
@@ -102,45 +121,63 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>) {
             r#type: alias_type.to_string()
         });
     }
+
+    structs.insert(0, AbiStruct{
+        name: "asset".to_string(),
+        base: String::default(),
+        fields: vec![
+            AbiField {name: "amount".to_string(), r#type: "i64".to_string()},
+            AbiField {name: "symbol".to_string(), r#type: "u64".to_string()},
+        ]
+    });
+
+    structs.insert(1, AbiStruct{
+        name: "extended_asset".to_string(),
+        base: String::default(),
+        fields: vec![
+            AbiField {name: "quantity".to_string(), r#type: "asset".to_string()},
+            AbiField {name: "contract".to_string(), r#type: "name".to_string()},
+        ]
+    });
 }
 
-impl TryFrom<ABI> for AntelopeSourceCode {
-    type Error = TypeCompileError;
-    fn try_from(abi: ABI) -> Result<AntelopeSourceCode, TypeCompileError> {
-        let mut aliases = abi.types().to_vec();
-        include_antelope_stdtypes(&mut aliases);
+macro_rules! impl_try_from_abi {
+    ($($abi:ty), + $(,)? => $target:ty) => {
+        $(
+            impl ::core::convert::TryFrom<&$abi> for $target {
+                type Error = TypeCompileError;
 
-        let enums = abi.variants().to_vec();
-        let mut structs = abi.structs().to_vec();
-        for struct_def in structs.iter_mut() {
-            expand_struct_base(&abi, struct_def)?;
-        }
-        Ok(AntelopeSourceCode {
-            aliases,
-            enums,
-            structs,
-        })
-    }
+                fn try_from(abi: &$abi) -> Result<$target, Self::Error> {
+                    let mut aliases = abi.types().to_vec();
+                    let mut structs = abi.structs().to_vec();
+
+                    include_antelope_stdtypes(
+                        &mut aliases,
+                        &mut structs,
+                    );
+
+                    let enums = abi.variants().to_vec();
+
+                    for struct_def in structs.iter_mut() {
+                        expand_struct_base(abi, struct_def)?;
+                    }
+
+                    Ok(Self { aliases, enums, structs })
+                }
+            }
+
+            impl ::core::convert::TryFrom<$abi> for $target {
+                type Error = TypeCompileError;
+
+                fn try_from(abi: $abi) -> Result<$target, Self::Error> {
+                    <$target as ::core::convert::TryFrom<&$abi>>::try_from(&abi)
+                }
+            }
+        )+
+    };
 }
 
-impl TryFrom<ShipABI> for AntelopeSourceCode {
-    type Error = TypeCompileError;
-    fn try_from(abi: ShipABI) -> Result<AntelopeSourceCode, TypeCompileError> {
-        let mut aliases = abi.types().to_vec();
-        include_antelope_stdtypes(&mut aliases);
-
-        let enums = abi.variants().to_vec();
-        let mut structs = abi.structs().to_vec();
-        for struct_def in structs.iter_mut() {
-            expand_struct_base(&abi, struct_def)?;
-        }
-        Ok(AntelopeSourceCode {
-            aliases,
-            enums,
-            structs,
-        })
-    }
-}
+impl_try_from_abi!(ABI, ShipABI => AntelopeSourceCode);
 
 impl SourceCode<
     AbiTypeDef,
@@ -193,14 +230,50 @@ impl SourceCode<
     }
 }
 
-impl<T> IOValue for BinaryExtension<T>
-where
-    T: IOValue + Packer + Default,
-{
+impl From<SymbolCode> for Value {
+    fn from(value: SymbolCode) -> Self {
+        value.value().into()
+    }
+}
 
-    fn as_io(&self) -> Value {
-        match &self.value {
-            Some(v) => v.as_io(),
+impl From<Symbol> for Value {
+    fn from(value: Symbol) -> Self {
+        value.value().into()
+    }
+}
+
+impl From<Asset> for Value {
+    fn from(value: Asset) -> Self {
+        Value::Struct(HashMap::from(
+            [
+                ("amount".to_string(), value.amount().into()),
+                ("symbol".to_string(), value.symbol().into()),
+            ]
+        ))
+    }
+}
+
+impl From<Name> for Value {
+    fn from(value: Name) -> Self {
+        value.value().into()
+    }
+}
+
+impl From<ABI> for Value {
+    fn from(value: ABI) -> Self {
+        let mut encoder = Encoder::new(0);
+        value.pack(&mut encoder);
+        Value::Bytes(encoder.get_bytes().to_vec())
+    }
+}
+
+impl<T> From<BinaryExtension<T>> for Value
+where
+    T: Packer + Default, for<'a> Value: From<&'a T>,
+{
+    fn from(value: BinaryExtension<T>) -> Value {
+        match value.value() {
+            Some(v) => v.into(),
             None    => Value::None,
         }
     }

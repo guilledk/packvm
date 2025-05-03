@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use std::mem::discriminant;
 use bimap::BiHashMap;
 use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef};
 use crate::debug_log;
@@ -16,6 +17,7 @@ macro_rules! assemble {
     };
 }
 
+#[derive(Clone)]
 pub struct Executable {
     pub code: Vec<Instruction>,
     pub str_map: BiHashMap<usize, String>,
@@ -43,6 +45,43 @@ impl Debug for Executable {
     }
 }
 
+impl Executable {
+    pub fn pretty_string(&self) -> String {
+        fn get_str_or_unknown(ex: &Executable, id: usize) -> &str {
+            match ex.str_map.get_by_left(&id) {
+                Some(s) => s,
+                None => "unknown target",
+            }
+        }
+
+        let mut s = String::new();
+        let mut jmp_table_ended = false;
+        for i in 0..self.code.len() {
+            let op = &self.code[i];
+            jmp_table_ended |= discriminant(op) != discriminant(&Instruction::Jmp {ptr: 0});
+            let msg = if !jmp_table_ended {
+                get_str_or_unknown(self, i)
+            } else {
+                match op {
+                    Instruction::Section(_, id) => {
+                        get_str_or_unknown(self, *id)
+                    }
+                    Instruction::Field(id) => {
+                        get_str_or_unknown(self, *id)
+                    }
+                    _ => ""
+                }
+            };
+            s += format!("\n\t{i}: {op:?}").as_str();
+            if !msg.is_empty() {
+                s += format!("  # {msg}").as_str();
+            }
+        }
+
+        s
+    }
+}
+
 fn assemble_sections<
     A: TypeAlias,
     T: TypeDef,
@@ -54,7 +93,9 @@ fn assemble_sections<
     executable: &mut Vec<Instruction>,
     sections: &HashMap<usize, usize>,
 ) -> Result<(), TypeCompileError> {
-    for sec_name in sections.keys() {
+    let mut sec_keys = sections.keys().collect::<Vec<&usize>>();
+    sec_keys.sort();
+    for sec_name in sec_keys {
         let start_ptr = sections.get(sec_name)
             .ok_or(compiler_error!("Couldn't find section {}", sec_name))?
             .clone();
@@ -62,7 +103,7 @@ fn assemble_sections<
         let sec_program = src_ns.get_program(sec_name)
             .ok_or(compiler_error!("Couldn't find section program {}", sec_name))?;
 
-        debug_log!("Assemble section {}", sec_name);
+        debug_log!("Assemble section {} ({})", sec_name, sec_program.name);
 
         let mut ptr = start_ptr;
         let mut found_exit = false;
@@ -147,13 +188,15 @@ pub fn assemble<
         &sections,
     )?;
 
+    let exec = Executable{
+        code,
+        str_map: src_ns.strings.clone(),
+    };
+
     #[cfg(feature = "debug")]
     {
-        for op in code.iter().enumerate() {
-            debug_log!("{:?}", op)
-        }
         // validate
-        for (jmp_i, op) in code[0..src_ns.len()].iter().cloned().enumerate() {
+        for (jmp_i, op) in exec.code[0..src_ns.len()].iter().cloned().enumerate() {
             match op {
                 Instruction::Jmp { ptr } => {
 
@@ -161,9 +204,9 @@ pub fn assemble<
                         .ok_or(compiler_error!("Couldn't find source program: {}", jmp_i))?;
 
                     let mut i = ptr;
-                    while code[i].clone() != Instruction::Exit {
+                    while exec.code[i].clone() != Instruction::Exit {
                         let rel_i = i - ptr;
-                        let asm_op = &code[i];
+                        let asm_op = &exec.code[i];
                         let src_op = &src_program.code[rel_i];
                         if !Instruction::validate_asm(src_op, asm_op) {
                             debug_log!("{} different at {}: {:?} -> {:?}", jmp_i, i, src_op, asm_op);
@@ -178,8 +221,5 @@ pub fn assemble<
         }
     }
 
-    Ok(Executable{
-        code,
-        str_map: src_ns.strings.clone(),
-    })
+    Ok(exec)
 }

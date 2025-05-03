@@ -6,7 +6,7 @@ use crate::{
 };
 use crate::compiler::assembly::Executable;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum NamespacePart {
     Root,
 
@@ -33,8 +33,8 @@ impl Into<String> for &NamespacePart {
     }
 }
 
-
-pub struct PackVM<'a> {
+#[derive(Debug, Clone)]
+pub struct PackVM {
     pub(crate) ip: usize,
     pub(crate) bp: usize,  // only for unpack
 
@@ -43,12 +43,12 @@ pub struct PackVM<'a> {
 
     pub(crate) io: Value,
     pub(crate) ionsp: Vec<NamespacePart>,
-    pub(crate) executable: &'a Executable
+    pub(crate) executable: Executable
 }
 
-impl<'a> PackVM<'a> {
-    pub fn from_executable(executable: &'a Executable) -> Self {
-        debug_log!("Initialized VM with executable: \n{:?}", executable);
+impl PackVM {
+    pub fn from_executable(executable: Executable) -> Self {
+        debug_log!("Initialized VM with executable: \n{}", executable.pretty_string());
         PackVM {
             ip: 0,
             bp: 0,

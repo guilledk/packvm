@@ -209,6 +209,12 @@ impl From<Vec<u8>> for Value {
     }
 }
 
+impl From<Vec<String>> for Value {
+    fn from(value: Vec<String>) -> Self {
+        Value::Array(value.into_iter().map(Value::String).collect())
+    }
+}
+
 impl From<VarUInt32> for Value {
     fn from(value: VarUInt32) -> Self {
         Value::VarUInt32(value.0)
@@ -331,15 +337,6 @@ impl Instruction {
     }
 }
 
-#[inline(always)]
-pub fn payload_base_size_of(instruction: &Instruction) -> usize {
-    match instruction {
-        #[allow(unused_variables)]
-        Instruction::Optional => 1,
-        _ => 0
-    }
-}
-
 pub const STD_TYPES: [&str; 39] = [
     "bool", "boolean",
 
@@ -408,95 +405,4 @@ macro_rules! instruction_for {
             _ => None,
         }
     };
-}
-
-// traits for things that can be part of an IO stack
-pub trait IOValue {
-    fn as_io(&self) -> Value;
-}
-
-macro_rules! impl_io_value {
-    ($( $src:ty ),* $(,)?) => {
-        $(impl IOValue for $src {
-            fn as_io(&self) -> Value {
-                self.into()
-            }
-        })*
-
-        $(impl IOValue for &$src {
-            fn as_io(&self) -> Value {
-                (*self).into()
-            }
-        })*
-    };
-}
-
-impl_io_value!(
-    bool,
-    u8,
-    u16,
-    u32,
-    u64,
-    u128,
-    i8,
-    i16,
-    i32,
-    i64,
-    i128,
-    f32, f64,
-    String,
-);
-
-
-impl IOValue for Vec<u8> {
-    fn as_io(&self) -> Value {
-        Value::Bytes(self.clone())
-    }
-}
-
-impl IOValue for Vec<String> {
-    fn as_io(&self) -> Value {
-        let mut val = Vec::new();
-        self.iter()
-            .map(|s| s.clone().into())
-            .for_each(|item| val.push(Value::String(item)));
-
-        Value::Array(val)
-    }
-}
-
-impl IOValue for Option<Vec<u8>> {
-    fn as_io(&self) -> Value {
-        match self {
-            Some(v) => v.as_io(),
-            None    => Value::None,
-        }
-    }
-}
-
-impl IOValue for Option<String> {
-    fn as_io(&self) -> Value {
-        match self {
-            Some(v) => v.as_io(),
-            None    => Value::None,
-        }
-    }
-}
-
-impl IOValue for Option<u128> {
-    fn as_io(&self) -> Value {
-        match self {
-            Some(v) => v.as_io(),
-            None    => Value::None,
-        }
-    }
-}
-
-default impl<T: IOValue> IOValue for Option<T> {
-    fn as_io(&self) -> Value {
-        match self {
-            Some(v) => v.as_io(),
-            None    => Value::None,
-        }
-    }
 }

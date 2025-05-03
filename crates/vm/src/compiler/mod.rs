@@ -1,6 +1,8 @@
 pub mod antelope;
 pub mod assembly;
 
+pub use assembly::assemble;
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -9,7 +11,6 @@ use std::marker::PhantomData;
 use bimap::BiHashMap;
 use crate::{debug_log, instruction_for};
 use crate::isa::Instruction;
-use crate::isa::payload_base_size_of;
 use crate::compiler_error;
 use crate::utils::{TypeCompileError};
 
@@ -100,6 +101,10 @@ pub trait SourceCode<
     fn is_variant_of(&self, ty: &str, var: &str) -> bool;
 
     fn program_id_for(&self, name: &str) -> Option<usize> {
+        let name = match self.resolve_alias(name) {
+            Some(name) => name,
+            None => name.to_string(),
+        };
         if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
             return Some(id);
         }
@@ -406,7 +411,7 @@ fn compile_enum<
 
     // variant index based jump table
     for (i, _var_name) in var_meta.variants().iter().enumerate() {
-        code.push(Instruction::JmpStructCND(i as u32, 3 + i));
+        code.push(Instruction::JmpStructCND(i as u32, vars_count + i));
     }
 
     // finally add each of the variant implementations code and their Jmp to post definition
@@ -487,13 +492,13 @@ pub fn compile_type<
     }
 
     if let Some(var_meta) = src.enums().iter().find(|v| v.name() == type_name) {
-        if program.name != var_meta.name() {
+        return if program.name != var_meta.name() {
             program.code.push(Instruction::JmpRet {
                 ptr: src.program_id_for(var_meta.name())
                     .ok_or(compiler_error!("Failed to resolve id of program: {}", var_meta.name()))?
                     .clone(),
             });
-            return Ok(());
+            Ok(())
         } else {
             let maybe_err = compile_enum(src, var_meta, 3);
             let var_opts = ok_or_raise(
@@ -504,22 +509,31 @@ pub fn compile_type<
                 )
             )?;
             program.code.extend(var_opts);
-            return Ok(());
+            Ok(())
         }
     }
 
     if let Some(struct_meta) = src.structs().iter().find(|s| s.name() == type_name) {
-        for (i, field) in struct_meta.fields().iter().enumerate() {
-            program.code.push(Instruction::Field(i));
-            program.strings.push(field.name().to_string());
-            match instruction_for!(field.type_name()) {
-                Some(op) => program.code.push(op),
-                None => {
-                    compile_type(src, &field.type_name(), program)?;
-                },
+        return if program.name != struct_meta.name() {
+            program.code.push(Instruction::JmpRet {
+                ptr: src.program_id_for(struct_meta.name())
+                    .ok_or(compiler_error!("Failed to resolve id of program: {}", struct_meta.name()))?
+                    .clone(),
+            });
+            Ok(())
+        } else {
+            for (i, field) in struct_meta.fields().iter().enumerate() {
+                program.code.push(Instruction::Field(i));
+                program.strings.push(field.name().to_string());
+                match instruction_for!(field.type_name()) {
+                    Some(op) => program.code.push(op),
+                    None => {
+                        compile_type(src, &field.type_name(), program)?;
+                    },
+                }
             }
+            Ok(())
         }
-        return Ok(());
     }
 
     Err(compiler_error!("unknown type '{}'", type_name))
@@ -539,10 +553,12 @@ pub fn compile_program<
     debug_log!("\tCompile program: {}", program_name);
 
     if src.is_std_type(&program_name) {
+        debug_log!("\t\t{} is a standard type, skip...", program_name);
         return Ok(());
     }
 
     if src.resolve_alias(&program_name).is_some() {
+        debug_log!("\t\t{} is an alias, skip...", program_name);
         return Ok(())
     }
 
@@ -581,9 +597,8 @@ pub fn compile_program<
     }
 
     program.code.push(Instruction::Exit);
-    program.base_size = program.code.iter()
-        .map(|op| payload_base_size_of(op))
-        .sum();
+
+    debug_log!("\t\t{} compiled.", program_name);
 
     Ok(())
 }

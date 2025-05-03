@@ -11,7 +11,6 @@ use antelope::{
 use packvm::{
     PackVM,
     Value,
-    IOValue,
     Instruction,
     compiler::{
         compile_type,
@@ -38,7 +37,7 @@ macro_rules! pack_and_assert {
         let mut ns = ProgramNamespace::from_source(&src);
         ns.set_program(0, program);
         let exec = assemble!(&ns);
-        let mut vm = PackVM::from_executable(&exec);
+        let mut vm = PackVM::from_executable(exec);
         let encoded = vm.run_pack(0, &$value).expect("Pack failed");
         assert_eq!(encoded, $expected);
     }};
@@ -209,7 +208,7 @@ fn test_pack_struct() {
     };
     test.pack(&mut enc);
 
-    let val: Value = test.as_io();
+    let val: Value = test.into();
 
     let abi: ABI = from_str(TESTABI).expect("failed to parse ABI JSON");
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
@@ -218,7 +217,7 @@ fn test_pack_struct() {
 
     let pid = src.program_id_for("test_struct").expect("failed to get program");
 
-    let mut vm = PackVM::from_executable(&code);
+    let mut vm = PackVM::from_executable(code);
     let encoded = vm.run_pack(pid, &val).expect("Pack failed");
     assert_eq!(encoded, enc.get_bytes());
 }

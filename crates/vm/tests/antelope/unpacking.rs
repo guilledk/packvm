@@ -8,10 +8,11 @@ use antelope::{
     serializer::{Encoder, Decoder, Packer, PackerError},
     EnumPacker, StructPacker
 };
+use antelope::chain::abi::ShipABI;
+use antelope::util::hex_to_bytes;
 use packvm::{
     PackVM,
     Value,
-    IOValue,
     Instruction,
     compiler::{
         compile_type,
@@ -38,7 +39,7 @@ macro_rules! unpack_and_assert {
         let mut ns = ProgramNamespace::from_source(&src);
         ns.set_program(0, program);
         let exec = assemble!(&ns);
-        let mut vm = PackVM::from_executable(&exec);
+        let mut vm = PackVM::from_executable(exec);
         let decoded = vm.run_unpack(0, $bytes).expect("Pack failed");
         assert_eq!(*decoded, $expected);
     }};
@@ -222,7 +223,7 @@ fn test_unpack_struct() {
     };
     test.pack(&mut enc);
 
-    let expected: Value = test.as_io();
+    let expected: Value = test.into();
 
     let abi: ABI = from_str(TESTABI).expect("failed to parse ABI JSON");
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
@@ -231,7 +232,26 @@ fn test_unpack_struct() {
 
     let pid = src.program_id_for("test_struct").expect("failed to get program");
 
-    let mut vm = PackVM::from_executable(&code);
+    let mut vm = PackVM::from_executable(code);
     let decoded = vm.run_unpack(pid, enc.get_bytes()).expect("Unpack failed");
     assert_eq!(*decoded, expected);
+}
+
+const STDABI: &str = include_str!("std_abi.json");
+
+#[test]
+fn test_unpack_result() {
+    let encoded = hex_to_bytes("011700000000000017d1359487a1d12277aec6a0d50207a7fa3a46a0b18ad11a6a093594b4150000000000001522ebe6ddc1f00b426e69faa006026c7dcf59815d0282cb579c8e21d1010a0000000000000ac54a7ca25f05f01a1caa35040d73e8a1298fbfadc9ad3bf18694243a010900000000000009485ad52d4d4d387b27c562a911790007288231fc107f80c77ebee29b01b801be92725e0000000000ea3055000000000009485ad52d4d4d387b27c562a911790007288231fc107f80c77ebee29b0000000000000000000000000000000000000000000000000000000000000000d007eefcb4c20a0ee78d2dfe8446527d91ab984240edea8fc5a7062100e4dedb00000000000000202ea20c87518fc9bfa42deb7bb1791e81657cca8c52f30042960690b480cd067e2b454c73eebda1087394fbffc9a606043fd89f8a4601abeedebd853873e5c9fa00000000");
+
+    let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src.program_id_for("result").expect("failed to get program");
+
+    let mut vm = PackVM::from_executable(code);
+    let decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
+
+    println!("{:#?}", decoded);
 }
