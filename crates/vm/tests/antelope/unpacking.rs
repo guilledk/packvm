@@ -125,6 +125,14 @@ fn test_unpack_array() {
             Integer::from(2u32).into()
         ]),
     );
+
+    let mut enc = Encoder::new(0);
+    Vec::<u32>::new().pack(&mut enc);
+    unpack_and_assert!(
+        "uint32[]",
+        enc.get_bytes(),
+        Value::Array(vec![]),
+    );
 }
 
 #[test]

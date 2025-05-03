@@ -1,6 +1,6 @@
 use antelope::chain::abi::{ShipABI};
 use serde_json::from_str;
-use packvm::{assemble, compile_source};
+use packvm::{assemble, compile_source, debug_log};
 use packvm::compiler::antelope::AntelopeSourceCode;
 
 const STD_ABI: &str = include_str!("std_abi.json");
@@ -13,7 +13,8 @@ fn test_abi() {
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
 
     let src_ns = compile_source!(src);
-    assemble!(&src_ns);
+    let _exec = assemble!(&src_ns).pretty_string();
+    debug_log!("{}", _exec);
 }
 
 #[test]
@@ -22,5 +23,6 @@ fn test_std_abi() {
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
 
     let src_ns = compile_source!(src);
-    assemble!(&src_ns);
+    let _exec = assemble!(&src_ns).pretty_string();
+    debug_log!("{}", _exec);
 }

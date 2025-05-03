@@ -24,7 +24,7 @@ macro_rules! type_mismatch {
 macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
-            "ip({:4}) cnd({:4}) | {:80} | ionsp: {}",
+            "ip({:4}) cnd({:4})          | {:80} | ionsp: {}",
             $vm.ip,
             $vm.cndstack.last().unwrap(),
             &format!("{}{}", $instr, format_args!($($args)*)),
@@ -370,11 +370,15 @@ pub fn extension(vm: &mut PackVM, io: &Value) -> OpResult {
 #[inline(always)]
 pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> OpResult {
     let val = vmgetio_expect!(vm, io, AnyPushCND);
-    let cnd: u32 = match val {
+    let cnd: Option<u32> = match val {
         Value::Array(values) => {
-            vm.ionsp.push(NamespacePart::ArrayNode);
-            vm.ionsp.push(NamespacePart::ArrayIndex);
-            values.len() as u32
+            if !values.is_empty() {
+                vm.ionsp.push(NamespacePart::ArrayNode);
+                vm.ionsp.push(NamespacePart::ArrayIndex);
+                Some(values.len() as u32)
+            } else {
+                None
+            }
         }
         Value::Struct(fields) => {
             let type_field = fields.get("type")
@@ -382,7 +386,7 @@ pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> 
 
             match type_field {
                 Value::Int(cnd) => {
-                    cnd.as_u64().unwrap() as u32
+                    Some(cnd.as_u64().unwrap() as u32)
                 }
                 _ => return type_mismatch!("Enum variant id Value::UInt32", val)
             }
@@ -399,11 +403,22 @@ pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> 
             }
         }
     };
+    if let Some(cnd) = cnd {
+        vm.cndstack.push(cnd);
+        let (size_raw, size_len) = VarUInt32(cnd).encode();
+        vmpack!(vm, buffer, &size_raw[..size_len]);
+        vmstep!(vm);
+    } else {
+        vmpack!(vm, buffer, &[0]);
+        let next_popcnd = vm.executable.code[vm.ip..].iter()
+            .position(|op| match op {
+                Instruction::PopCND => true,
+                _ => false,
+            })
+            .ok_or(packer_error!("Can't find next CND pop"))?;
 
-    vm.cndstack.push(cnd);
-    let (size_raw, size_len) = VarUInt32(cnd).encode();
-    vmpack!(vm, buffer, &size_raw[..size_len]);
-    vmstep!(vm);
+        vm.ip += next_popcnd + 1;
+    }
     vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cndstack.last().unwrap());
     Ok(())
 }

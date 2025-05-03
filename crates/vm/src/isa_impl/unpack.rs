@@ -244,7 +244,6 @@ pub fn float128(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
         .map_err(|e| packer_error!("{}", e))?;
 
     vmsetio!(vm, Value::Float128(float_raw));
-    vm.bp += 16;
     vmstep!(vm);
     vmlog!(vm, "float128", "()");
     Ok(())
@@ -320,14 +319,28 @@ pub fn pushcnd(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
     let (cnd, cnd_size) = VarUInt32::decode(&buffer[vm.bp..])
         .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
     vm.bp += cnd_size;
-    vm.cndstack.push(cnd.0);
 
     match ctype {
         0u8 => {
-            vm.ionsp.push(NamespacePart::ArrayNode);
-            vm.ionsp.push(NamespacePart::ArrayIndex);
+            if cnd.0 > 0 {
+                vm.cndstack.push(cnd.0);
+                vm.ionsp.push(NamespacePart::ArrayNode);
+                vm.ionsp.push(NamespacePart::ArrayIndex);
+                vmstep!(vm);
+            } else {
+                let next_popcnd = vm.executable.code[vm.ip..].iter()
+                    .position(|op| match op {
+                        Instruction::PopCND => true,
+                        _ => false,
+                    })
+                    .ok_or(packer_error!("Can't find next CND pop"))?;
+
+                vm.ip += next_popcnd + 1;
+                vmsetio!(vm, Value::Array(Vec::new()));
+            }
         }
         1u8 => {
+            vm.cndstack.push(cnd.0);
             let val = vmgetio!(vm);
             match val {
                 Value::Struct(values) => {
@@ -335,11 +348,11 @@ pub fn pushcnd(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
                 }
                 _ => return Err(packer_error!("expected struct to be target value but got: {}", val)),
             }
+            vmstep!(vm);
         }
         _ => return Err(packer_error!("invalid ctype {}", ctype)),
     }
 
-    vmstep!(vm);
     vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cndstack.last().unwrap());
     Ok(())
 }

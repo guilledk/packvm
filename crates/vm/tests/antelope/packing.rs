@@ -108,6 +108,15 @@ fn test_pack_array() {
         Value::Array(vec![Integer::from(1u32).into(), Integer::from(2u32).into()]),
         enc.get_bytes()
     );
+
+    let mut enc = Encoder::new(0);
+    let actual: Vec<u32> = Vec::new();
+    actual.pack(&mut enc);
+    pack_and_assert!(
+        "uint32[]",
+        Value::Array(Vec::<Value>::new()),
+        enc.get_bytes()
+    );
 }
 
 #[test]
