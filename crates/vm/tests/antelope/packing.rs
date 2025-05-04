@@ -1,14 +1,13 @@
 use serde::Serialize;
 use serde_json::from_str;
-use antelope::{
-    chain::{
-        abi::{ABI},
-        binary_extension::BinaryExtension,
-    },
-    serializer::{Encoder, Decoder, Packer, PackerError},
-    EnumPacker, StructPacker
-};
+use antelope::{chain::{
+    abi::{ABI},
+    binary_extension::BinaryExtension,
+}, name, serializer::{Encoder, Decoder, Packer, PackerError}, EnumPacker, StructPacker};
 use antelope::chain::abi::ShipABI;
+use antelope::chain::authority::{Authority, KeyWeight};
+use antelope::chain::name::Name;
+use antelope::chain::public_key::PublicKey;
 use packvm::{
     PackVM,
     Value,
@@ -269,4 +268,69 @@ fn test_pack_get_status_request_v0() {
     let mut vm = PackVM::from_executable(code);
     let encoded = vm.run_pack(pid, &input).expect("Pack failed");
     println!("{:?}", encoded);
+}
+
+const EOSIOABI: &str = include_str!("eosio.system.json");
+
+#[test]
+fn test_pack_newaccount() {
+
+    #[derive(Clone, Default, Serialize, PartialEq, Debug, StructPacker, VMStruct)]
+    struct NewAccountParams {
+        creator: Name,
+        name: Name,
+        owner: Authority,
+        active: Authority
+    }
+
+    let mut encoder = Encoder::new(0);
+    let params = NewAccountParams {
+        creator: name!("eosio"),
+        name: name!("testaccount"),
+        owner: Authority {
+            threshold: 1,
+            keys: vec![
+                KeyWeight {
+                    key: PublicKey::new_from_str("PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm").unwrap(),
+                    weight: 1,
+                }
+            ],
+            accounts: vec![],
+            waits: vec![],
+        },
+        active: Authority {
+            threshold: 1,
+            keys: vec![
+                KeyWeight {
+                    key: PublicKey::new_from_str("PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm").unwrap(),
+                    weight: 1,
+                }
+            ],
+            accounts: vec![],
+            waits: vec![],
+        }
+    };
+    let value: Value = params.clone().into();
+    params.pack(&mut encoder);
+    let params_raw = encoder.get_bytes().to_vec();
+
+    let abi: ABI = from_str(EOSIOABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src.program_id_for("newaccount").expect("failed to get program");
+    let mut vm = PackVM::from_executable(code);
+    let encoded = vm.run_pack(pid, &value).expect("Pack failed");
+
+    assert_eq!(encoded, params_raw);
+
+    // let action = Action {
+    //     account: name!("eosio"),
+    //     name: name!("newaccount"),
+    //     authorization: vec![
+    //         PermissionLevel {actor: name!("eosio"), permission: name!("active")}
+    //     ],
+    //     data: encoder.get_bytes().to_vec(),
+    // };
 }

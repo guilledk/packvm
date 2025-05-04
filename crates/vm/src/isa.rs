@@ -156,8 +156,56 @@ impl From<bool> for Value {
     }
 }
 
-impl<T: Into<Integer>> From<T> for Value {
-    fn from(value: T) -> Self {
+impl From<Integer> for Value {
+    fn from(value: Integer) -> Self {
+        Value::Int(value)
+    }
+}
+
+impl From<u8> for Value {
+    fn from(value: u8) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<i8> for Value {
+    fn from(value: i8) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<u16> for Value {
+    fn from(value: u16) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<i16> for Value {
+    fn from(value: i16) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<u32> for Value {
+    fn from(value: u32) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<u64> for Value {
+    fn from(value: u64) -> Self {
+        Value::Int(value.into())
+    }
+}
+
+impl From<i64> for Value {
+    fn from(value: i64) -> Self {
         Value::Int(value.into())
     }
 }

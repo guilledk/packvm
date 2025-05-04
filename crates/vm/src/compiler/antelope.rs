@@ -8,12 +8,16 @@ use antelope::{
     },
     serializer::{Encoder, Packer}
 };
+use antelope::chain::action::PermissionLevel;
+use antelope::chain::authority::{Authority, KeyWeight, PermissionLevelWeight, WaitWeight};
+use antelope::chain::public_key::PublicKey;
 use crate::{
     compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef},
     utils::TypeCompileError,
     isa::STD_TYPES,
     Value
 };
+use crate::utils::numbers::Integer;
 
 impl TypeAlias for AbiTypeDef {
     fn new_type_name(&self) -> &str {
@@ -285,5 +289,76 @@ impl From<BinaryExtension<u128>> for Value {
             Some(v) => v.clone().into(),
             None    => Value::None,
         }
+    }
+}
+
+impl From<PublicKey> for Value {
+    fn from(value: PublicKey) -> Self {
+        Value::Bytes(value.value)
+    }
+}
+
+impl From<KeyWeight> for Value {
+    fn from(value: KeyWeight) -> Self {
+        Value::Struct(HashMap::from([
+            ("key".to_string(), value.key.into()),
+            ("weight".to_string(), value.weight.into()),
+        ]))
+    }
+}
+
+impl From<Vec<KeyWeight>> for Value {
+    fn from(value: Vec<KeyWeight>) -> Self {
+        Value::Array(value.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<PermissionLevel> for Value {
+    fn from(value: PermissionLevel) -> Self {
+        Value::Struct(HashMap::from([
+            ("permission".to_string(), value.permission.into()),
+            ("actor".to_string(), value.actor.into()),
+        ]))
+    }
+}
+
+impl From<PermissionLevelWeight> for Value {
+    fn from(value: PermissionLevelWeight) -> Self {
+        Value::Struct(HashMap::from([
+            ("weight".to_string(), value.weight.into()),
+            ("permission".to_string(), value.permission.into()),
+        ]))
+    }
+}
+
+impl From<Vec<PermissionLevelWeight>> for Value {
+    fn from(value: Vec<PermissionLevelWeight>) -> Self {
+        Value::Array(value.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<Authority> for Value {
+    fn from(value: Authority) -> Self {
+        Value::Struct(HashMap::from([
+            ("threshold".to_string(), Value::Int(Integer::from(value.threshold))),
+            ("keys".to_string(), value.keys.into()),
+            ("accounts".to_string(), value.accounts.into()),
+            ("waits".to_string(), value.waits.into()),
+        ]))
+    }
+}
+
+impl From<WaitWeight> for Value {
+    fn from(value: WaitWeight) -> Self {
+        Value::Struct(HashMap::from([
+            ("wait_sec".to_string(), Value::Int(Integer::from(value.wait_sec))),
+            ("weight".to_string(), Value::Int(Integer::from(value.weight))),
+        ]))
+    }
+}
+
+impl From<Vec<WaitWeight>> for Value {
+    fn from(value: Vec<WaitWeight>) -> Self {
+        Value::Array(value.into_iter().map(Into::into).collect())
     }
 }
