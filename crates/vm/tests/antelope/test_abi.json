@@ -102,6 +102,16 @@
           "type": "bigint$"
         }
       ]
+    },
+    {
+      "name": "test_sig",
+      "base": "",
+      "fields": [
+        {
+          "name": "sig",
+          "type": "signature"
+        }
+      ]
     }
   ],
   "variants": [

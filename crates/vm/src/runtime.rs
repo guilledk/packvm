@@ -63,16 +63,26 @@ impl PackVM {
         }
     }
 
+    pub fn reset(&mut self) {
+        self.bp = 0;
+        self.cndstack = vec![0];
+        self.retstack = vec![0];
+
+        self.io = Value::None;
+        self.ionsp = vec![NamespacePart::Root];
+    }
+
     pub fn run_pack(
         &mut self,
         program: usize,
         io: &Value
     ) -> Result<Vec<u8>, PackerError> {
+        self.reset();
         let mut buffer: Vec<u8> = vec![];
         self.ip = program;
 
         debug_log!("Running pack program: {}", program);
-        debug_log!("Input: {:#?}", io);
+        debug_log!("Input: {:?}", io);
 
         pack::exec(self, io, &mut buffer)?;
 
@@ -85,14 +95,34 @@ impl PackVM {
         buffer: &[u8]
     ) -> Result<&Value, PackerError> {
         self.ip = program;
+        self.reset();
 
         debug_log!("Running unpack program: {}", program);
 
         unpack::exec(self, buffer)?;
 
-        debug_log!("Output: {:#?}", &self.io);
+        debug_log!("Output: {:?}", &self.io);
 
         Ok(&self.io)
+    }
+
+    #[inline(always)]
+    pub fn cnd_at_level(&self, level: usize) -> u32 {
+        let level = self.ionsp.len() - level;
+        let mut csp = 1usize;
+        for part in &self.ionsp[..level] {
+            match part {
+                NamespacePart::StructNode(ctype) => {
+                    if *ctype == 1 {
+                        csp += 1;
+                    }
+                },
+                NamespacePart::ArrayNode => csp += 1,
+                _ => (),
+            }
+        }
+
+        self.cndstack[csp]
     }
 
     #[inline(always)]
@@ -111,5 +141,13 @@ impl PackVM {
     pub fn cnd_mut(&mut self) -> &mut u32 {
         let last = self.cndstack.len() - 1;
         &mut self.cndstack[last]
+    }
+
+    pub fn nsp_string(&self) -> String {
+        self.ionsp.iter()
+            .map(|p| p.into())
+            .map(|p| if p == "idx" {self.cnd().to_string()} else {p})
+            .collect::<Vec<String>>()
+            .join(".")
     }
 }

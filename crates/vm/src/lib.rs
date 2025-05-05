@@ -16,3 +16,6 @@ pub mod runtime;
 pub use runtime::{
     PackVM,
 };
+
+#[cfg(feature = "python")]
+mod pyo3;

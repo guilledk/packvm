@@ -20,10 +20,10 @@ macro_rules! vmlog {
         println!(
             "ip({:4}) cnd({:4}) bp({:4}) | {:80} | ionsp: {}",
             $vm.ip,
-            $vm.cndstack.last().unwrap(),
+            $vm.cnd(),
             $vm.bp,
             &format!("{}{}", $instr, format_args!($($args)*)),
-            $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
+            $vm.nsp_string()
         );
     }};
 }
@@ -39,13 +39,18 @@ macro_rules! vmstep {
     };
 }
 
+
 /// Walk `io` following `nsp`, materialising intermediate containers
 /// (`Value::Array` / `Value::Struct`) when they don’t exist yet, and
 /// return a *mutable* reference to the final slot.
 // allow unreachable due to how the tailcall macro expands
 #[allow(unreachable_code)]
 #[tailcall]
-fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
+fn vmiomut<'a>(
+    io: &'a mut Value,
+    nsp: &[NamespacePart],
+    cndstack: &[u32]
+) -> &'a mut Value {
     // out-of recursion: nothing left to consume, return the current slot
     if nsp.is_empty() {
         return io;
@@ -53,14 +58,13 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
 
     match &nsp[0] {
         // root case
-        NamespacePart::Root => vmiomut(io, &nsp[1..]),
+        NamespacePart::Root => vmiomut(io, &nsp[1..], &cndstack[1..]),
 
         // array indexing
         NamespacePart::ArrayIndex => {
             if let Value::Array(ref mut arr) = io {
-                let idx = arr.len();
-                arr.push(Value::None);
-                vmiomut(&mut arr[idx], &nsp[1..])
+                let idx = arr.len() - cndstack[0] as usize;
+                vmiomut(&mut arr[idx], &nsp[1..], &cndstack[1..])
             } else {
                 panic!("expected Value::Array at {:?}, io: {:#?}", nsp, io);
             }
@@ -70,7 +74,7 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
         NamespacePart::StructField(name) => {
             if let Value::Struct(ref mut fields) = io {
                 let val = fields.entry(name.clone()).or_insert(Value::None);
-                vmiomut(val, &nsp[1..])
+                vmiomut(val, &nsp[1..], cndstack)
             } else {
                 panic!("expected Value::Struct at {:?} io: {:?}", nsp, io);
             }
@@ -78,29 +82,39 @@ fn vmiomut<'a>(io: &'a mut Value, nsp: &[NamespacePart]) -> &'a mut Value {
 
         NamespacePart::ArrayNode => {
             if let Value::None = io {
-                *io = Value::Array(Vec::new());
+                let arr_len = cndstack[0] as usize;
+                let mut arr = Vec::with_capacity(arr_len);
+                for _ in 0..arr_len {
+                    arr.push(Value::None);
+                }
+                *io = Value::Array(arr);
             }
-            vmiomut(io, &nsp[1..])
+            vmiomut(io, &nsp[1..], cndstack)
         }
 
-        NamespacePart::StructNode(_ctype) => {
+        NamespacePart::StructNode(ctype) => {
             if let Value::None = io {
                 *io = Value::Struct(HashMap::new());
             }
-            vmiomut(io, &nsp[1..])
+            let cndstack = if *ctype == 1 {
+                &cndstack[1..]
+            } else {
+                cndstack
+            };
+            vmiomut(io, &nsp[1..], cndstack)
         }
     }
 }
 
 macro_rules! vmgetio {
     ($vm:expr) => {
-        vmiomut(&mut $vm.io, $vm.ionsp.as_slice())
+        vmiomut(&mut $vm.io, $vm.ionsp.as_slice(), $vm.cndstack.as_slice())
     };
 }
 
 macro_rules! vmsetio {
     ($vm:expr, $val:expr) => {{
-        let slot = vmiomut(&mut $vm.io, &$vm.ionsp);
+        let slot = vmiomut(&mut $vm.io, $vm.ionsp.as_slice(), $vm.cndstack.as_slice());
         *slot = $val;
     }};
 }
@@ -279,8 +293,8 @@ pub fn string(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-pub fn bytes_raw(vm: &mut PackVM, len: u8, buffer: &[u8]) -> OpResult {
-    let raw = vmunpack!(vm, buffer, len as usize);
+pub fn bytes_raw(vm: &mut PackVM, buffer: &[u8], len: usize) -> OpResult {
+    let raw = vmunpack!(vm, buffer, len);
     vmsetio!(vm, Value::Bytes(raw.to_vec()));
     vmstep!(vm);
     vmlog!(vm, "bytes_raw", "({})", len);
@@ -353,7 +367,7 @@ pub fn pushcnd(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
         _ => return Err(packer_error!("invalid ctype {}", ctype)),
     }
 
-    vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cndstack.last().unwrap());
+    vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cnd());
     Ok(())
 }
 
@@ -391,7 +405,7 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
         }
 
         Instruction::Bytes => { bytes(vm, buffer)?; exec(vm, buffer) }
-        Instruction::BytesRaw{ size } => { bytes_raw(vm, size, buffer)?; exec(vm, buffer) }
+        Instruction::BytesRaw{ size } => { bytes_raw(vm, buffer, size)?; exec(vm, buffer) }
         Instruction::String => { string(vm, buffer)?; exec(vm, buffer) }
 
         Instruction::Optional => { optional(vm, buffer)?; exec(vm, buffer) }

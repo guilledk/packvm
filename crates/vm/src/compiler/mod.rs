@@ -394,12 +394,12 @@ fn compile_enum<
 
     let variants = var_meta.variants();
 
-    if variants.len() == 1 {
-        code.push(Instruction::PushCND(1));
-        code.push(compile_type_ops(src, &variants[0], depth)?);
-        code.push(Instruction::PopCND);
-        return Ok(code)
-    }
+    // if variants.len() == 1 {
+    //     code.push(Instruction::PushCND(1));
+    //     code.push(compile_type_ops(src, &variants[0], depth)?);
+    //     code.push(Instruction::PopCND);
+    //     return Ok(code)
+    // }
 
     let vars_count = variants.len();
 

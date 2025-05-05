@@ -9,6 +9,8 @@ use antelope::{
     EnumPacker, StructPacker
 };
 use antelope::chain::abi::ShipABI;
+use antelope::chain::key_type::{KeyType, KeyTypeTrait};
+use antelope::chain::signature::Signature;
 use antelope::util::hex_to_bytes;
 use packvm::{
     PackVM,
@@ -263,4 +265,56 @@ fn test_unpack_result() {
 
     let mut vm = PackVM::from_executable(code);
     let _decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
+}
+
+#[test]
+fn test_unpack_signature() {
+    let encoded = hex_to_bytes("001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b02");
+
+    let mut dec = Decoder::new(encoded.as_slice());
+    let mut sig = Signature::default();
+    dec.unpack(&mut sig).expect("failed to unpack signature");
+
+    let abi: ShipABI = from_str(TESTABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src.program_id_for("test_sig").expect("failed to get program");
+
+    let mut vm = PackVM::from_executable(code);
+    let decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
+    let dec_sig: Signature = if let Value::Struct(map) = decoded {
+        let sig_field = map.get("sig").expect("failed to get sig field");
+        if let Value::Bytes(raw_sig) = sig_field {
+            Signature::from_bytes(
+                raw_sig[1..].to_vec(),
+                KeyType::from_index(raw_sig[0]).unwrap()
+            )
+        } else {
+            panic!("failed to unpack signature expected bytes: {:?}", sig_field);
+        }
+    } else {
+
+        panic!("failed to unpack signature expected map: {:?}", decoded);
+    };
+
+    assert_eq!(sig, dec_sig);
+}
+#[test]
+fn test_unpack_signed_block() {
+    let encoded = hex_to_bytes("99c7555f0000000000ea3055000000000016da8c9c17de0607fb22bbcccdfc2f95b9c85461d7ccde1fc2c097410efec74205e7462bb45dba6e21443ceb7ccd0c68dd9e6dcafddcb6c18b5c0f7d44439dd15b0ea5bf1a1a399e9f3423ad1e6041810cde302e40931adfccded25013000000000000001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b02004f0400002a0101001f1678ccbb248596e3aecb7c37fa5569a37db46d7f09563e1231aaa9bed40fac730c2a2eecd58434cb683dbcdd2f854ab4cc854e874f9f8a4a3695971f66e7d6fc0000a102d02a18681500f507a3a200ff0000030000000000ea305500409e9a2264b89a010000000000ea305500000000a8ed3232660000000000ea305550352ab4a9d177570100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000000000000ea305500b0cafe4873bd3e010000000000ea305500000000a8ed3232140000000000ea305550352ab4a9d17757809698000000000000ea305500003f2a1ba6a24a010000000000ea305500000000a8ed3232310000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000a08601000000000004544c4f5300000001000081000000100101001f71e1c8ec416f658f0a59d48e435ce9f539a72f980cd922407315277594e6c70f071a86ad33138b3dd37fdfc38434b3254c0dba17625f239de6c7ac7a7e7fb03e000053d02a18681500f507a3a200ff00000100a6823403ea3055000000572d3ccdcd010000000000ea305500000000a8ed3232210000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000000000");
+
+    let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src.program_id_for("signed_block").expect("failed to get program");
+
+    let mut vm = PackVM::from_executable(code);
+    let mut decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed").clone();
+    let re_encoded = vm.run_pack(pid, &mut decoded).expect("Pack failed");
+
+    assert_eq!(re_encoded, encoded);
 }

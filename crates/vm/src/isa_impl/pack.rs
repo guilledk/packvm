@@ -25,10 +25,9 @@ macro_rules! vmlog {
     ($vm:expr, $instr:expr, $($args:tt)*) => {{
         println!(
             "ip({:4}) cnd({:4})          | {:80} | ionsp: {}",
-            $vm.ip,
-            $vm.cndstack.last().unwrap(),
+            $vm.ip, $vm.cnd(),
             &format!("{}{}", $instr, format_args!($($args)*)),
-            $vm.ionsp.iter().map(|p| p.into()).collect::<Vec<String>>().join("."),
+            $vm.nsp_string(),
         );
     }};
 }
@@ -42,7 +41,12 @@ macro_rules! vmlog {
 // allow unreachable due to how the tailcall macro expands
 #[allow(unreachable_code)]
 #[tailcall]
-fn vmio<'a>(vm: &PackVM, io: &'a Value, nsp: &[NamespacePart]) -> Result<Option<&'a Value>, PackerError> {
+fn vmio<'a>(
+    vm: &PackVM,
+    io: &'a Value,
+    nsp: &[NamespacePart],
+    cndstack: &[u32]
+) -> Result<Option<&'a Value>, PackerError> {
     // out-of recursion: nothing left to consume, return the current slot
     if nsp.is_empty() {
         return Ok(Some(io));
@@ -50,18 +54,13 @@ fn vmio<'a>(vm: &PackVM, io: &'a Value, nsp: &[NamespacePart]) -> Result<Option<
 
     match &nsp[0] {
         // root case
-        NamespacePart::Root => vmio(vm, io, &nsp[1..]),
+        NamespacePart::Root => vmio(vm, io, &nsp[1..], &cndstack[1..]),
 
         // array indexing
         NamespacePart::ArrayIndex => {
             if let Value::Array(arr) = io {
-                let cnd_idx = vm.cndstack.len() - nsp.len();
-                if let Some(cnd) = vm.cndstack.get(cnd_idx) {
-                    let index = arr.len() - *cnd as usize;
-                    vmio(vm, &arr[index], &nsp[1..])
-                } else {
-                    Ok(None)
-                }
+                let index = arr.len() - cndstack[0] as usize;
+                vmio(vm, &arr[index], &nsp[1..], &cndstack[1..])
             } else {
                 Err(packer_error!("expected Value::Array at {:?}, io: {:#?}", nsp, io))
             }
@@ -70,8 +69,13 @@ fn vmio<'a>(vm: &PackVM, io: &'a Value, nsp: &[NamespacePart]) -> Result<Option<
         // struct field access
         NamespacePart::StructField(name) => {
             if let Value::Struct(fields) = io {
+                let cndstack = if fields.contains_key("type") {
+                    &cndstack[1..]
+                } else {
+                    cndstack
+                };
                 if let Some(val) = fields.get(name) {
-                    vmio(vm, val, &nsp[1..])
+                    vmio(vm, val, &nsp[1..], cndstack)
                 } else {
                     Ok(None)
                 }
@@ -81,21 +85,32 @@ fn vmio<'a>(vm: &PackVM, io: &'a Value, nsp: &[NamespacePart]) -> Result<Option<
         }
 
         _ => {
-            vmio(vm, io, &nsp[1..])
+            vmio(vm, io, &nsp[1..], cndstack)
         }
     }
 }
 
 macro_rules! vmgetio {
     ($vm:ident, $io:ident) => {
-        vmio($vm, $io, $vm.ionsp.as_slice())?
+        vmio($vm, $io, $vm.ionsp.as_slice(), $vm.cndstack.as_slice())?
     };
 }
 
 macro_rules! vmgetio_expect {
     ($vm:ident, $io:ident, $expect:ident) => {
-        vmgetio!($vm, $io).ok_or(
-            packer_error!("expected vmgetio to return Some({})", stringify!($expect))
+        vmio($vm, $io, $vm.ionsp.as_slice(), $vm.cndstack.as_slice()).map_err(
+            |e|
+            packer_error!(
+                "expected vmgetio to return Some({}) but got {}",
+                stringify!($expect),
+                e.to_string()
+            )
+        )?
+        .ok_or(
+            packer_error!(
+                "expected vmgetio to return Some({}) but got None",
+                stringify!($expect),
+            )
         )?
     };
 }
@@ -312,11 +327,11 @@ pub fn string(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
 }
 
 #[inline(always)]
-pub fn bytes_raw(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, len: u8) -> OpResult {
-    let val = vmgetio_expect!(vm, io, BytesRaw);
+pub fn bytes_raw(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, len: usize) -> OpResult {
+    let val = vmgetio_expect!(vm, io, Bytes);
     match val {
         Value::Bytes(v) => {
-            if len > 0 && v.len() != len as usize {
+            if len > 0 && v.len() != len {
                 return Err(packer_error!("Raw bytes fixed size mistmatch: {} != {}", v.len(), len))
             }
             vmpack!(vm, buffer, v);

@@ -338,7 +338,7 @@ pub enum Instruction {
     VarInt,
     Float{ size: u8 },
     Bytes,  // bytes with LEB128 encoded size first
-    BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
+    BytesRaw{ size: usize },  // raw bytes, if param is > 0 do size check on stack value
     String,  // utf-8 string with LEB128 encoded len
 
     Optional,  // next value is optional, encode a flag as a u8 before
@@ -419,6 +419,20 @@ pub const STD_TYPES: [&str; 39] = [
     "raw",
 ];
 
+
+#[macro_export]
+macro_rules! is_std_type {
+    ($type_name:expr) => {{
+        if STD_TYPES.contains($type_name) {
+            return true;
+        }
+        if $type_name.starts_with("raw(") {
+            return true;
+        }
+        return false;
+    }};
+}
+
 #[macro_export]
 macro_rules! instruction_for {
     ($ty:expr) => {
@@ -453,7 +467,19 @@ macro_rules! instruction_for {
 
             "raw" => Some(Instruction::BytesRaw{ size: 0 }),
 
-            _ => None,
+            _ => {
+                if $ty.starts_with("raw(") {
+                    let size: usize = $ty
+                        .split("(").collect::<Vec<&str>>()[1]
+                        .split(")").collect::<Vec<&str>>()[0]
+                        .parse()
+                        .unwrap_or_default();
+
+                    Some(Instruction::BytesRaw{ size })
+                } else {
+                    None
+                }
+            },
         }
     };
 }

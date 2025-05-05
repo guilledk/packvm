@@ -10,13 +10,11 @@ use antelope::{
 };
 use antelope::chain::action::PermissionLevel;
 use antelope::chain::authority::{Authority, KeyWeight, PermissionLevelWeight, WaitWeight};
+use antelope::chain::checksum::{Checksum160, Checksum256, Checksum512};
+use antelope::chain::key_type::{KeyType, KeyTypeTrait};
 use antelope::chain::public_key::PublicKey;
-use crate::{
-    compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef},
-    utils::TypeCompileError,
-    isa::STD_TYPES,
-    Value
-};
+use antelope::chain::signature::Signature;
+use crate::{compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef}, utils::TypeCompileError, isa::STD_TYPES, Value, is_std_type};
 use crate::utils::numbers::Integer;
 
 impl TypeAlias for AbiTypeDef {
@@ -117,7 +115,7 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<Ab
         ("block_timestamp_type", "u32"),
 
         ("public_key", "raw"),
-        ("signature", "raw")
+        ("signature", "raw(66)"),
 
     ] {
         aliases.insert(0, AbiTypeDef {
@@ -126,23 +124,38 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<Ab
         });
     }
 
-    structs.insert(0, AbiStruct{
-        name: "asset".to_string(),
-        base: String::default(),
-        fields: vec![
-            AbiField {name: "amount".to_string(), r#type: "i64".to_string()},
-            AbiField {name: "symbol".to_string(), r#type: "u64".to_string()},
-        ]
-    });
+    let extra_structs = [
+        AbiStruct{
+            name: "asset".to_string(),
+            base: String::default(),
+            fields: vec![
+                AbiField {name: "amount".to_string(), r#type: "i64".to_string()},
+                AbiField {name: "symbol".to_string(), r#type: "u64".to_string()},
+            ]
+        },
 
-    structs.insert(1, AbiStruct{
-        name: "extended_asset".to_string(),
-        base: String::default(),
-        fields: vec![
-            AbiField {name: "quantity".to_string(), r#type: "asset".to_string()},
-            AbiField {name: "contract".to_string(), r#type: "name".to_string()},
-        ]
-    });
+        AbiStruct{
+            name: "extended_asset".to_string(),
+            base: String::default(),
+            fields: vec![
+                AbiField {name: "quantity".to_string(), r#type: "asset".to_string()},
+                AbiField {name: "contract".to_string(), r#type: "name".to_string()},
+            ]
+        },
+
+        // AbiStruct{
+        //     name: "signature".to_string(),
+        //     base: String::default(),
+        //     fields: vec![
+        //         AbiField {name: "key_type".to_string(), r#type: "u8".to_string()},
+        //         AbiField {name: "value".to_string(), r#type: "raw(66)".to_string()},
+        //     ]
+        // }
+    ];
+
+    for (i, struct_def) in extra_structs.iter().enumerate() {
+        structs.insert(i, struct_def.clone());
+    }
 }
 
 macro_rules! impl_try_from_abi {
@@ -213,7 +226,7 @@ impl SourceCode<
             Some(ty) => ty,
             None => ty.to_string()
         };
-        STD_TYPES.contains(&ty.as_str())
+        is_std_type!(&ty.as_str())
     }
 
     fn is_alias_of(&self, alias: &str, ty: &str) -> bool {
@@ -236,13 +249,13 @@ impl SourceCode<
 
 impl From<SymbolCode> for Value {
     fn from(value: SymbolCode) -> Self {
-        value.value().into()
+        value.into()
     }
 }
 
 impl From<Symbol> for Value {
     fn from(value: Symbol) -> Self {
-        value.value().into()
+        Into::<u64>::into(value).into()
     }
 }
 
@@ -292,9 +305,35 @@ impl From<BinaryExtension<u128>> for Value {
     }
 }
 
+impl From<Checksum160> for Value {
+    fn from(value: Checksum160) -> Self {
+        Value::Bytes(value.data.to_vec())
+    }
+}
+
+impl From<Checksum256> for Value {
+    fn from(value: Checksum256) -> Self {
+        Value::Bytes(value.data.to_vec())
+    }
+}
+
+impl From<Checksum512> for Value {
+    fn from(value: Checksum512) -> Self {
+        Value::Bytes(value.data.to_vec())
+    }
+}
+
+impl From<KeyType> for Value {
+    fn from(value: KeyType) -> Self {
+        value.to_index().into()
+    }
+}
+
 impl From<PublicKey> for Value {
     fn from(value: PublicKey) -> Self {
-        Value::Bytes(value.value)
+        let mut raw = vec![value.key_type.to_index()];
+        raw.extend_from_slice(value.value.as_slice());
+        Value::Bytes(raw)
     }
 }
 
@@ -360,5 +399,16 @@ impl From<WaitWeight> for Value {
 impl From<Vec<WaitWeight>> for Value {
     fn from(value: Vec<WaitWeight>) -> Self {
         Value::Array(value.into_iter().map(Into::into).collect())
+    }
+}
+
+impl From<Signature> for Value {
+    fn from(value: Signature) -> Self {
+        match value.key_type {
+            _ => Value::Struct(HashMap::from([
+                ("key_type".to_string(), value.key_type.into()),
+                ("value".to_string(), value.value.into()),
+            ])),
+        }
     }
 }
