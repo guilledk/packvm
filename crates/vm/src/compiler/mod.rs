@@ -13,6 +13,7 @@ use crate::{debug_log, instruction_for};
 use crate::isa::Instruction;
 use crate::compiler_error;
 use crate::utils::{TypeCompileError};
+use crate::utils::numbers::U48;
 
 #[inline(always)]
 pub fn ok_or_panic<T, E: Error>(maybe_err: Result<T, E>) -> T {{
@@ -64,7 +65,7 @@ macro_rules! compile_source {
 #[macro_export]
 macro_rules! get_str_or_unknown {
     ($str_map:expr, $id:expr) => {
-        match $str_map.get_by_left(&$id) {
+        match $str_map.get_by_left($id) {
             Some(s) => s.clone(),
             None => format!("unknown str({})", $id),
         }
@@ -110,7 +111,7 @@ pub trait SourceCode<
     fn is_variant(&self, ty: &str) -> bool;
     fn is_variant_of(&self, ty: &str, var: &str) -> bool;
 
-    fn program_id_for(&self, name: &str) -> Option<usize> {
+    fn program_id_for(&self, name: &str) -> Option<U48> {
         let name = match self.resolve_alias(name) {
             Some(name) => name,
             None => name.to_string(),
@@ -119,11 +120,11 @@ pub trait SourceCode<
         // add one if found cause id 0 is reserved
 
         if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
-            return Some(id + 1);
+            return Some((id + 1).into());
         }
 
         if let Some(id) = self.enums().iter().position(|s| s.name() == name) {
-            return Some(id + self.structs().len() + 1);
+            return Some((id + self.structs().len() + 1).into());
         }
 
         None
@@ -132,11 +133,11 @@ pub trait SourceCode<
 
 #[derive(Default)]
 pub struct Program {
-    pub id: usize,
+    pub id: U48,
     pub name: String,
 
     pub code: Vec<Instruction>,
-    pub deps: HashSet<usize>,
+    pub deps: HashSet<U48>,
     pub strings: Vec<String>,
 
     pub base_size: usize,
@@ -152,8 +153,8 @@ pub struct ProgramNamespace<
     Source: SourceCode<A, T, E, S> + Debug
 > {
     src: &'a Source,
-    ns: HashMap<usize, Program>,
-    strings: BiHashMap<usize, String>,
+    ns: HashMap<U48, Program>,
+    strings: BiHashMap<U48, String>,
     _marker: PhantomData<(A, T, E, S)>,
 }
 
@@ -181,7 +182,7 @@ impl<
         None
     }
 
-    pub fn get_program(&self, id: &usize) -> Option<&Program> {
+    pub fn get_program(&self, id: &U48) -> Option<&Program> {
         self.ns.get(id)
     }
 
@@ -201,7 +202,7 @@ impl<
         }))
     }
 
-    pub fn set_program(&mut self, id: usize, program: Program) -> Option<Program> {
+    pub fn set_program(&mut self, id: U48, program: Program) -> Option<Program> {
         self.ns.insert(id, program)
     }
 
@@ -211,8 +212,8 @@ impl<
 
     pub fn calculate_string_map(&mut self) -> () {
         self.strings.clear();
-        self.strings.insert(0, "RESERVED".to_string());
-        let mut field_id = self.len() + 1;
+        self.strings.insert(U48(0), "RESERVED".to_string());
+        let mut field_id: U48 = (self.len() + 1).into();
         for program in self.into_iter().cloned().collect::<Vec<Program>>() {
             self.strings.insert(program.id, program.name.clone());
             for string in &program.strings {
@@ -220,14 +221,14 @@ impl<
                     continue;
                 }
                 self.strings.insert(field_id, string.clone());
-                field_id += 1;
+                field_id += U48(1);
             }
         }
         #[cfg(feature = "debug")]
         {
             let mut strings = self.strings.iter()
                 .map(|(id, s)| (*id, s.clone()))
-                .collect::<Vec<(usize, String)>>();
+                .collect::<Vec<(U48, String)>>();
             strings.sort();
             debug_log!("Calulated string map: [");
             for s in strings {
@@ -315,12 +316,12 @@ pub fn compile_type_ops<
 
     if src.enums().iter().find(|v| v.name() == type_name).is_some() ||
         src.structs().iter().find(|s| s.name() == type_name).is_some() {
-        return Ok(Instruction::JmpRet {
-            ptr: src.program_id_for(&type_name)
+        return Ok(Instruction::JmpRet(
+            src.program_id_for(&type_name)
                 .ok_or(
                     compiler_error!("Failed to resolve id of program: {}", type_name)
                 )?.clone(),
-        });
+        ));
     }
 
     Err(compiler_error!("unknown or not resolved type '{}'", type_name))
@@ -392,7 +393,7 @@ fn compile_array<
 
     code.push(compile_type_ops(src, type_name, depth)?);
 
-    code.push(Instruction::JmpArrayCND(0));  // ptr will be filled by assembler == final pos of instruction - 1
+    code.push(Instruction::JmpArrayCND(U48(0)));  // ptr will be filled by assembler == final pos of instruction - 1
     code.push(Instruction::PopCursor);
 
     Ok(code)
@@ -432,14 +433,14 @@ fn compile_enum<
 
     // variant index based jump table
     for (i, _var_name) in var_meta.variants().iter().enumerate() {
-        code.push(Instruction::JmpVariant(i as u32, vars_count + i));
+        code.push(Instruction::JmpVariant(i as u32, (vars_count + i) as u16));
     }
 
     // finally add each of the variant implementations code and their Jmp to post definition
     for (i, var_name) in var_meta.variants().iter().enumerate() {
         code.push(compile_type_ops(src, var_name, depth + 1)?);
         if vars_count - i > 1 {
-            code.push(Instruction::Jmp{ptr: end_ptr});
+            code.push(Instruction::Jmp(end_ptr.into()));
         }
     }
 
@@ -512,11 +513,11 @@ pub fn compile_type<
 
     if let Some(var_meta) = src.enums().iter().find(|v| v.name() == type_name) {
         return if program.name != var_meta.name() {
-            program.code.push(Instruction::JmpRet {
-                ptr: src.program_id_for(var_meta.name())
+            program.code.push(Instruction::JmpRet (
+                src.program_id_for(var_meta.name())
                     .ok_or(compiler_error!("Failed to resolve id of program: {}", var_meta.name()))?
                     .clone(),
-            });
+            ));
             Ok(())
         } else {
             let maybe_err = compile_enum(src, var_meta, 3);
@@ -534,15 +535,15 @@ pub fn compile_type<
 
     if let Some(struct_meta) = src.structs().iter().find(|s| s.name() == type_name) {
         return if program.name != struct_meta.name() {
-            program.code.push(Instruction::JmpRet {
-                ptr: src.program_id_for(struct_meta.name())
+            program.code.push(Instruction::JmpRet(
+                src.program_id_for(struct_meta.name())
                     .ok_or(compiler_error!("Failed to resolve id of program: {}", struct_meta.name()))?
                     .clone(),
-            });
+            ));
             Ok(())
         } else {
             for (i, field) in struct_meta.fields().iter().enumerate() {
-                program.code.push(Instruction::Field(i));
+                program.code.push(Instruction::Field(i.into()));
                 program.strings.push(field.name().to_string());
                 match instruction_for!(field.type_name()) {
                     Some(op) => program.code.push(op),
@@ -598,9 +599,7 @@ pub fn compile_program<
     // gather dependencies
     for op in program.code.iter() {
         match op {
-            Instruction::JmpRet {
-                ptr: id
-            } => {
+            Instruction::JmpRet(id) => {
                 program.deps.insert(*id);
             },
             _ => ()

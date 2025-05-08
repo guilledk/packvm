@@ -20,7 +20,7 @@ use packvm::{PackVM, Value, Instruction, compiler::{
     antelope::AntelopeSourceCode,
 }, compile_source, assemble, run_unpack, run_pack};
 use packvm::isa::diff_values;
-use packvm::utils::numbers::{Float, Integer, Long};
+use packvm::utils::numbers::{U48, Float, Integer, Long};
 use packvm_macros::{VMStruct, VMEnum};
 
 const TESTABI: &str = include_str!("test_abi.json");
@@ -34,10 +34,10 @@ macro_rules! unpack_and_assert {
         compile_type(&src, $type_name, &mut program).expect("failed to compile");
         program.code.push(Instruction::Exit);
         let mut ns = ProgramNamespace::from_source(&src);
-        ns.set_program(0, program);
+        ns.set_program(U48(1), program);
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let decoded = run_unpack!(vm, 0, $bytes);
+        let decoded = run_unpack!(vm, U48(1), $bytes);
         assert_eq!(decoded, $expected);
     }};
 }

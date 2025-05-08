@@ -20,10 +20,10 @@ macro_rules! jmp {
 }
 
 #[macro_export]
-macro_rules! jmpscnd {
+macro_rules! jmpvariant {
     ($vm:ident, $variant:expr, $ptr:expr) => {{
         if $vm.et == $variant {
-            $vm.ip = $ptr;
+            $vm.ip += $ptr;
         } else {
             $vm.ip += 1;
         }

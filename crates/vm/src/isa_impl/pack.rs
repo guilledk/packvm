@@ -2,13 +2,8 @@
 
 use tailcall::tailcall;
 
-use crate::{
-    debug_log, exit, field,
-    isa_impl::common::OpResult,
-    jmp, jmpret, jmpscnd, packer_error, popcursor,
-    utils::varint::{VarInt32, VarUInt32},
-    Instruction, PackVM, Value,
-};
+use crate::{debug_log, exit, field, isa_impl::common::OpResult, jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor, utils::varint::{VarInt32, VarUInt32}, Instruction, PackVM, Value};
+use crate::utils::numbers::U48;
 
 macro_rules! vmgetio {
     ($vm:ident) => {{
@@ -19,7 +14,7 @@ macro_rules! vmgetio {
                 let idx = arr.len() - cnd as usize;
                 Ok(&arr[idx])
             }
-            Value::Struct(map) if $vm.fp != 0 => {
+            Value::Struct(map) if $vm.fp != U48(0) => {
                 let fname =
                     $vm.executable
                         .str_map
@@ -50,7 +45,7 @@ macro_rules! vmgetio_mut {
                 let idx = arr.len() - cnd as usize;
                 Ok(&mut arr[idx])
             }
-            Value::Struct(map) if $vm.fp != 0 => {
+            Value::Struct(map) if $vm.fp != U48(0) => {
                 let fname =
                     $vm.executable
                         .str_map
@@ -239,7 +234,7 @@ fn string(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
 }
 
 #[inline(always)]
-fn bytes_raw(vm: &mut PackVM, buf: &mut Vec<u8>, len: usize) -> OpResult {
+fn bytes_raw(vm: &mut PackVM, buf: &mut Vec<u8>, len: U48) -> OpResult {
     let v = vmgetio_expect!(vm, Value::Bytes(_), "Bytes");
     let bytes = if let Value::Bytes(b) = v {
         b
@@ -247,7 +242,7 @@ fn bytes_raw(vm: &mut PackVM, buf: &mut Vec<u8>, len: usize) -> OpResult {
         unreachable!()
     };
 
-    if len != 0 && bytes.len() != len {
+    if len.0 != 0 && bytes.len() != len.0 as usize {
         return Err(packer_error!(
             "Raw bytes fixed-size mismatch: {} != {}",
             bytes.len(),
@@ -302,12 +297,12 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
                     child_ptr = slot as *mut _;
                     cnd
                 } else {
-                    let next_popcnd = vm.executable.code[vm.ip..]
+                    let next_popcnd = vm.executable.code[usize::from(vm.ip)..]
                         .iter()
                         .position(|op| op.cmp_type(&Instruction::PopCursor))
                         .ok_or(packer_error!("Can't find next CND pop"))?;
 
-                    vm.ip += next_popcnd + 1;
+                    vm.ip += U48::from(next_popcnd + 1);
                     0
                 }
             }
@@ -324,22 +319,6 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
     let (raw, len) = VarUInt32(cnd).encode();
     vmpack!(vm, buf, &raw[..len]);
 
-    Ok(())
-}
-
-#[inline(always)]
-fn jmpacnd(vm: &mut PackVM, ptr: usize) -> OpResult {
-    let cnd = vm.cnd_mut();
-    *cnd -= 1;
-    let cnd = *cnd;
-    if cnd > 0 {
-        vm.ip = ptr;
-    } else {
-        if vm.cursor.len() > 1 {
-            vm.cndstack.pop();
-        }
-        vm.ip += 1;
-    }
     Ok(())
 }
 
@@ -384,12 +363,12 @@ fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
 #[tailcall]
 pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
     debug_log!("{:?}", vm);
-    match vm.executable.code[vm.ip] {
+    match vm.executable.code[usize::from(vm.ip)] {
         Instruction::Bool => {
             boolean(vm, buf)?;
             exec(vm, buf)
         }
-        Instruction::UInt { size } => {
+        Instruction::UInt(size) => {
             if size == 16 {
                 long(vm, buf, false)?
             } else {
@@ -397,7 +376,7 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             };
             exec(vm, buf)
         }
-        Instruction::Int { size } => {
+        Instruction::Int(size) => {
             if size == 16 {
                 long(vm, buf, true)?
             } else {
@@ -405,7 +384,7 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             };
             exec(vm, buf)
         }
-        Instruction::Float { size } => {
+        Instruction::Float(size) => {
             if size == 16 {
                 float128(vm, buf)?
             } else {
@@ -425,7 +404,7 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             bytes(vm, buf)?;
             exec(vm, buf)
         }
-        Instruction::BytesRaw { size } => {
+        Instruction::BytesRaw(size) => {
             bytes_raw(vm, buf, size)?;
             exec(vm, buf)
         }
@@ -452,20 +431,20 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             exec(vm, buf)
         }
 
-        Instruction::Jmp { ptr } => {
+        Instruction::Jmp(ptr) => {
             jmp!(vm, ptr)?;
             exec(vm, buf)
         }
-        Instruction::JmpRet { ptr } => {
+        Instruction::JmpRet(ptr) => {
             jmpret!(vm, ptr);
             exec(vm, buf)
         }
         Instruction::JmpArrayCND(ptr) => {
-            jmpacnd(vm, ptr)?;
+            jmpacnd!(vm, ptr)?;
             exec(vm, buf)
         }
         Instruction::JmpVariant(v, p) => {
-            jmpscnd!(vm, v, p)?;
+            jmpvariant!(vm, v, U48(p as u64))?;
             exec(vm, buf)
         }
 

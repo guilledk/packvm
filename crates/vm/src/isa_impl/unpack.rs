@@ -1,5 +1,5 @@
-use crate::utils::numbers::{Float, Integer, Long};
-use crate::{debug_log, exit, field, jmp, jmpacnd, jmpret, jmpscnd, packer_error, popcursor};
+use crate::utils::numbers::{Float, Integer, Long, U48};
+use crate::{debug_log, exit, field, jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor};
 use crate::{
     isa_impl::common::OpResult,
     utils::{
@@ -264,8 +264,8 @@ fn string(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-fn bytes_raw(vm: &mut PackVM, buffer: &[u8], len: usize) -> OpResult {
-    let raw = vmunpack!(vm, buffer, len);
+fn bytes_raw(vm: &mut PackVM, buffer: &[u8], len: U48) -> OpResult {
+    let raw = vmunpack!(vm, buffer, len.0 as usize);
     vmsetio!(vm, Value::Bytes(raw.to_vec()));
     vmstep!(vm);
     Ok(())
@@ -309,7 +309,7 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
         vmstep!(vm);
         vm.cndstack.push(cnd.0);
     } else {
-        let next_jmpacnd = vm.executable.code[vm.ip..]
+        let next_jmpacnd = vm.executable.code[usize::from(vm.ip)..]
             .iter()
             .position(|op| match op {
                 Instruction::JmpArrayCND(_) => true,
@@ -317,7 +317,7 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
             })
             .ok_or(packer_error!("Can't find next CND pop"))?;
 
-        vm.ip += next_jmpacnd + 1;
+        vm.ip += U48((next_jmpacnd + 1) as u64);
         vmsetio!(vm, Value::Array(Vec::new()));
     }
 
@@ -325,8 +325,7 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
-fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8, id: usize) -> OpResult {
+fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
     if !vm.ef {
         vmpushio!(vm, Value::Struct(HashMap::new()));
     }
@@ -360,13 +359,13 @@ fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8, id: usize) -> OpResult {
 #[tailcall]
 pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
     debug_log!("{:?}", vm);
-    match vm.executable.code[vm.ip] {
+    match vm.executable.code[usize::from(vm.ip)] {
         Instruction::Bool => {
             boolean(vm, buffer)?;
             exec(vm, buffer)
         }
 
-        Instruction::UInt { size } => {
+        Instruction::UInt(size) => {
             if size == 16 {
                 long(vm, buffer, false)?
             } else {
@@ -374,7 +373,7 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
             };
             exec(vm, buffer)
         }
-        Instruction::Int { size } => {
+        Instruction::Int(size) => {
             if size == 16 {
                 long(vm, buffer, true)?
             } else {
@@ -392,7 +391,7 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
             exec(vm, buffer)
         }
 
-        Instruction::Float { size } => match size {
+        Instruction::Float(size) => match size {
             4 | 8 => {
                 float(vm, buffer, size)?;
                 exec(vm, buffer)
@@ -408,7 +407,7 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
             bytes(vm, buffer)?;
             exec(vm, buffer)
         }
-        Instruction::BytesRaw { size } => {
+        Instruction::BytesRaw(size) => {
             bytes_raw(vm, buffer, size)?;
             exec(vm, buffer)
         }
@@ -434,11 +433,11 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
             popcursor!(vm)?;
             exec(vm, buffer)
         }
-        Instruction::Jmp { ptr } => {
+        Instruction::Jmp(ptr) => {
             jmp!(vm, ptr)?;
             exec(vm, buffer)
         }
-        Instruction::JmpRet { ptr } => {
+        Instruction::JmpRet(ptr) => {
             jmpret!(vm, ptr);
             exec(vm, buffer)
         }
@@ -447,7 +446,7 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
             exec(vm, buffer)
         }
         Instruction::JmpVariant(variant, ptr) => {
-            jmpscnd!(vm, variant, ptr)?;
+            jmpvariant!(vm, variant, U48(ptr as u64))?;
             exec(vm, buffer)
         }
         Instruction::Exit => {
@@ -457,8 +456,8 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
                 exec(vm, buffer)
             }
         }
-        Instruction::Section(ctype, id) => {
-            section(vm, buffer, ctype, id)?;
+        Instruction::Section(ctype, _) => {
+            section(vm, buffer, ctype)?;
             exec(vm, buffer)
         }
         Instruction::Field(name) => {

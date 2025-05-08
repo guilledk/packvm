@@ -7,6 +7,7 @@ use crate::{
 };
 use crate::compiler::assembly::Executable;
 use crate::isa_impl::pack;
+use crate::utils::numbers::U48;
 
 /// Always points at the *slot* the current opcode writes into.
 #[derive(Debug, Clone)]
@@ -49,14 +50,14 @@ impl ValueCursor {
 
 #[derive(Clone)]
 pub struct PackVM {
-    pub(crate) ip: usize,
+    pub(crate) ip: U48,
     pub(crate) bp: usize,  // only for unpack
-    pub(crate) fp: usize,  // next field id
+    pub(crate) fp: U48,  // next field id
     pub(crate) et: u32,  // next enum variant index
     pub(crate) ef: bool,  // on unpack, used to not repeat enum -> struct double push
 
     pub(crate) cndstack: Vec<u32>,
-    pub(crate) retstack: Vec<usize>,
+    pub(crate) retstack: Vec<U48>,
 
     pub(crate) cursor: ValueCursor,
     pub(crate) executable: Executable
@@ -66,14 +67,14 @@ impl PackVM {
     pub fn from_executable(executable: Executable) -> Self {
         debug_log!("Initialized VM with executable: \n{}", executable.pretty_string());
         PackVM {
-            ip: 0,
+            ip: U48(0),
+            fp: U48(0),
             bp: 0,
-            fp: 0,
             et: 0,
             ef: false,
 
             cndstack: vec![0],
-            retstack: vec![0],
+            retstack: vec![U48(0)],
 
             cursor: ValueCursor { stack: Vec::new() },
             executable,
@@ -82,18 +83,18 @@ impl PackVM {
 
     pub fn reset(&mut self) {
         self.bp = 0;
-        self.fp = 0;
+        self.fp = U48(0);
         self.ef = false;
 
         self.cndstack = vec![0];
-        self.retstack = vec![0];
+        self.retstack = vec![U48(0)];
 
         self.cursor.stack.clear();
     }
 
     pub fn run_pack(
         &mut self,
-        program: usize,
+        program: U48,
         io: &Value
     ) -> Result<Vec<u8>, PackerError> {
         self.reset();
@@ -112,7 +113,7 @@ impl PackVM {
 
     pub fn run_unpack(
         &mut self,
-        program: usize,
+        program: U48,
         buffer: &[u8]
     ) -> Result<Value, PackerError> {
         self.reset();

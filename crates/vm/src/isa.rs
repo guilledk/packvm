@@ -45,7 +45,7 @@ void abi_serializer::configure_built_in_types() {
 Any other type should be able to be represented by a sequence of these types
 
  */
-use crate::utils::numbers::{Float, Integer, Long};
+use crate::utils::numbers::{Float, Integer, Long, U48};
 use crate::utils::varint::{VarInt32, VarUInt32};
 use std::cmp::PartialEq;
 use std::collections::{BTreeSet, HashMap};
@@ -442,21 +442,13 @@ pub fn diff_values(left: &Value, right: &Value) -> Option<Vec<String>> {
 pub enum Instruction {
     // IO manipulation, what to pack/unpack next
     Bool,
-    UInt {
-        size: u8,
-    },
-    Int {
-        size: u8,
-    },
+    UInt(u8),
+    Int(u8),
     VarUInt,
     VarInt,
-    Float {
-        size: u8,
-    },
+    Float(u8),
     Bytes, // bytes with LEB128 encoded size first
-    BytesRaw {
-        size: usize,
-    }, // raw bytes, if param is > 0 do size check on stack value
+    BytesRaw (U48), // raw bytes, if param is > 0 do size check on stack value
     String, // utf-8 string with LEB128 encoded len
 
     Optional,  // next value is optional, encode a flag as a u8 before
@@ -466,10 +458,10 @@ pub enum Instruction {
     Section(
         // indicates a new program section
         u8,    // struct type: 1 = enum, 2 = struct
-        usize, // program id
+        U48, // program id
     ),
 
-    Field(usize), // indicate field name string id for next value
+    Field(U48), // indicate field name string id for next value
 
     // push condition from io into condition stack
     // used to indicate array len
@@ -479,25 +471,21 @@ pub enum Instruction {
     PopCursor,
 
     // jumps
-    Jmp {
-        ptr: usize,
-    }, // absolute jmp
+    Jmp(U48), // absolute jmp
 
     // perform absolute jmp and return on next Exit instruction
-    JmpRet {
-        ptr: usize,
-    },
+    JmpRet(U48),
 
     // conditional jumps
 
     // jump depending on et register
     JmpVariant(
-        u32,   // et value
-        usize, // location to jump to
+        u32, // et value
+        u16, // rel location to jump to
     ),
 
     // jump to pointer if array cnd > 0
-    JmpArrayCND(usize),
+    JmpArrayCND(U48),
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,
@@ -570,43 +558,42 @@ macro_rules! instruction_for {
         match $ty {
             "bool" | "boolean" => Some(Instruction::Bool),
 
-            "uint8" | "u8" => Some(Instruction::UInt { size: 1 }),
-            "uint16" | "u16" => Some(Instruction::UInt { size: 2 }),
-            "uint32" | "u32" => Some(Instruction::UInt { size: 4 }),
-            "uint64" | "u64" => Some(Instruction::UInt { size: 8 }),
-            "uint128" | "u128" => Some(Instruction::UInt { size: 16 }),
+            "uint8" | "u8" => Some(Instruction::UInt(1)),
+            "uint16" | "u16" => Some(Instruction::UInt(2)),
+            "uint32" | "u32" => Some(Instruction::UInt(4)),
+            "uint64" | "u64" => Some(Instruction::UInt(8)),
+            "uint128" | "u128" => Some(Instruction::UInt(16)),
 
-            "int8" | "i8" => Some(Instruction::Int { size: 1 }),
-            "int16" | "i16" => Some(Instruction::Int { size: 2 }),
-            "int32" | "i32" => Some(Instruction::Int { size: 4 }),
-            "int64" | "i64" => Some(Instruction::Int { size: 8 }),
-            "int128" | "i128" => Some(Instruction::Int { size: 16 }),
+            "int8" | "i8" => Some(Instruction::Int(1)),
+            "int16" | "i16" => Some(Instruction::Int(2)),
+            "int32" | "i32" => Some(Instruction::Int(4)),
+            "int64" | "i64" => Some(Instruction::Int(8)),
+            "int128" | "i128" => Some(Instruction::Int(16)),
 
             "uleb128" | "varuint32" => Some(Instruction::VarUInt),
             "sleb128" | "varint32" => Some(Instruction::VarInt),
 
-            "float32" | "f32" => Some(Instruction::Float { size: 4 }),
-            "float64" | "f64" => Some(Instruction::Float { size: 8 }),
-            "float128" | "f128" => Some(Instruction::Float { size: 16 }),
+            "float32" | "f32" => Some(Instruction::Float(4)),
+            "float64" | "f64" => Some(Instruction::Float(8)),
+            "float128" | "f128" => Some(Instruction::Float(16)),
 
             "bytes" => Some(Instruction::Bytes),
             "str" | "string" => Some(Instruction::String),
 
-            "sum160" => Some(Instruction::BytesRaw { size: 20 }),
-            "sum256" => Some(Instruction::BytesRaw { size: 32 }),
-            "sum512" => Some(Instruction::BytesRaw { size: 64 }),
+            "sum160" => Some(Instruction::BytesRaw(U48(20))),
+            "sum256" => Some(Instruction::BytesRaw(U48(32))),
+            "sum512" => Some(Instruction::BytesRaw(U48(64))),
 
-            "raw" => Some(Instruction::BytesRaw { size: 0 }),
+            "raw" => Some(Instruction::BytesRaw(U48(0))),
 
             _ => {
                 if $ty.starts_with("raw(") {
-                    let size: usize = $ty.split("(").collect::<Vec<&str>>()[1]
-                        .split(")")
-                        .collect::<Vec<&str>>()[0]
-                        .parse()
-                        .unwrap_or_default();
+                    let size = U48::from($ty.split('(').nth(1)
+                        .and_then(|s| s.split(')').next())
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or_default());
 
-                    Some(Instruction::BytesRaw { size })
+                    Some(Instruction::BytesRaw(size))
                 } else {
                     None
                 }

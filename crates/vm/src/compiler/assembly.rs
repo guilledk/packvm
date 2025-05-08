@@ -5,6 +5,7 @@ use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlia
 use crate::{debug_log, get_str_or_unknown};
 use crate::isa::Instruction;
 use crate::compiler_error;
+use crate::utils::numbers::U48;
 use crate::utils::TypeCompileError;
 
 #[macro_export]
@@ -19,7 +20,7 @@ macro_rules! assemble {
 #[derive(Clone)]
 pub struct Executable {
     pub code: Vec<Instruction>,
-    pub str_map: BiHashMap<usize, String>,
+    pub str_map: BiHashMap<U48, String>,
 }
 
 impl Debug for Executable {
@@ -36,7 +37,7 @@ impl Debug for Executable {
         writeln!(f, "Strings: [")?;
         for i in 0..self.str_map.len() {
             let not_str = format!("unknown {}", i);
-            let str = self.str_map.get_by_left(&i)
+            let str = self.str_map.get_by_left(&U48::from(i))
                 .unwrap_or(&not_str);
             writeln!(f, "\t{:4}: {:?}", i, str)?;
         }
@@ -46,8 +47,8 @@ impl Debug for Executable {
 
 impl Executable {
 
-    fn simple_jmp_str(&self, ptr: usize) -> String {
-        let op = &self.code[ptr];
+    fn simple_jmp_str(&self, ptr: U48) -> String {
+        let op = &self.code[usize::from(ptr)];
         match op {
             Instruction::Section(ctype, id) => {
                 let type_str = match ctype {
@@ -58,13 +59,13 @@ impl Executable {
                 let sec_str = get_str_or_unknown!(self.str_map, id);
                 format!("{} {}", type_str, sec_str)
             }
-            Instruction::JmpRet { ptr } => self.simple_jmp_str(*ptr),
-            Instruction::JmpVariant(_, ptr) => self.simple_jmp_str(*ptr),
+            Instruction::JmpRet(ptr) => self.simple_jmp_str(*ptr),
+            Instruction::JmpVariant(_, ptr) => self.simple_jmp_str(U48(*ptr as u64)),
             _ => format!("{:?}", op)
         }
     }
-    pub fn pretty_op_string(&self, i: usize) -> String {
-        let op = &self.code[i];
+    pub fn pretty_op_string(&self, i: U48) -> String {
+        let op = &self.code[usize::from(i)];
         match op {
             Instruction::Section(ctype, id) => {
                 let type_str = match ctype {
@@ -76,12 +77,12 @@ impl Executable {
                 format!("Section({}, {})", type_str, sec_str)
             }
             Instruction::Field(id) => format!("Field({})", get_str_or_unknown!(self.str_map, id)),
-            Instruction::Jmp { ptr } => format!("{:?} -> {}", op, self.simple_jmp_str(*ptr)),
-            Instruction::JmpRet { ptr } => {
+            Instruction::Jmp(ptr) => format!("{:?} -> {}", op, self.simple_jmp_str(*ptr)),
+            Instruction::JmpRet(ptr) => {
                 format!("{:?} -> {}", op, self.simple_jmp_str(*ptr))
             }
             Instruction::JmpVariant(_, ptr) => {
-                format!("{:?} -> {}", op, self.simple_jmp_str(*ptr))
+                format!("{:?} -> {}", op, self.simple_jmp_str(U48::from(*ptr as u64)))
             }
             _ => format!("{:?}", op),
         }
@@ -90,7 +91,7 @@ impl Executable {
     pub fn pretty_string(&self) -> String {
         let mut s = String::new();
         for i in 0..self.code.len() {
-            let op_str = self.pretty_op_string(i);
+            let op_str = self.pretty_op_string(U48::from(i));
             s += format!("\n\t{i}: {op_str}").as_str();
         }
 
@@ -107,9 +108,9 @@ fn assemble_sections<
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
     executable: &mut Vec<Instruction>,
-    sections: &HashMap<usize, usize>,
+    sections: &HashMap<U48, U48>,
 ) -> Result<(), TypeCompileError> {
-    let mut sec_keys = sections.keys().collect::<Vec<&usize>>();
+    let mut sec_keys = sections.keys().collect::<Vec<&U48>>();
     sec_keys.sort();
     for sec_name in sec_keys {
         let start_ptr = sections.get(sec_name)
@@ -121,27 +122,25 @@ fn assemble_sections<
 
         debug_log!("Assemble section {} ({})", sec_name, sec_program.name);
 
-        let mut ptr = start_ptr;
+        let mut ptr = usize::from(start_ptr);
         let mut found_exit = false;
         while ptr < executable.len() {
             match executable[ptr].clone() {
                 Instruction::Exit => {
                     found_exit = true;
                 },
-                Instruction::Jmp { ptr: jptr } => {
-                    executable[ptr] = Instruction::Jmp {
-                        ptr: start_ptr + jptr
-                    };
+                Instruction::Jmp(jptr) => {
+                    executable[ptr] = Instruction::Jmp(start_ptr + jptr);
                 },
-                Instruction::JmpVariant(cnd, jptr) => {
-                    executable[ptr] = Instruction::JmpVariant(cnd, ptr + jptr);
-                }
+                // Instruction::JmpVariant(cnd, jptr) => {
+                //     executable[ptr] = Instruction::JmpVariant(cnd, jptr);
+                // }
                 Instruction::JmpArrayCND(_) => {
-                    executable[ptr] = Instruction::JmpArrayCND(ptr - 1);
+                    executable[ptr] = Instruction::JmpArrayCND(U48(ptr as u64 - 1));
                 }
                 Instruction::Field(rel_str_id) => {
                     let src_strings = &sec_program.strings;
-                    let field_name = match sec_program.strings.get(rel_str_id) {
+                    let field_name = match sec_program.strings.get(usize::from(rel_str_id)) {
                         Some(name) => Ok(name),
                         None => Err(compiler_error!(
                             "Couldn't find str of rel id {} in strings: {:#?}\nProgram code: {:#?}\nAt location: {ptr}\n{}",
@@ -158,12 +157,12 @@ fn assemble_sections<
 
                     executable[ptr] = Instruction::Field(str_id);
                 }
-                Instruction::JmpRet { ptr: id } => {
-                    executable[ptr] = Instruction::JmpRet {
-                        ptr: sections.get(&id)
+                Instruction::JmpRet(id) => {
+                    executable[ptr] = Instruction::JmpRet(
+                        sections.get(&id)
                             .ok_or(compiler_error!("Couldn't find section {}", id))?
                             .clone(),
-                    }
+                    );
                 }
                 _ => ()
             }
@@ -189,23 +188,21 @@ pub fn assemble<
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
 ) -> Result<Executable, TypeCompileError> {
-    let mut code = vec![Instruction::Jmp { ptr: 1 }];
+    let mut code = vec![Instruction::Jmp(U48(0))];
 
     // namespace .into_iter() is guaranteed to be in order of pid
     for program in src_ns.into_iter() {
         // insert jump table entry for program, for now ptr will just contain the pid
         // will be fixed during section assembly
-        code.insert(program.id, Instruction::Jmp {
-            ptr: program.id
-        });
+        code.insert(usize::from(program.id), Instruction::Jmp(program.id));
     }
 
     let mut sections = HashMap::new();
     for program in src_ns.into_iter() {
-        let section_ptr = code.len();
+        let section_ptr = U48::from(code.len());
         sections.insert(program.id, section_ptr);
         // fix jump table entry
-        code[program.id] = Instruction::Jmp {ptr: section_ptr};
+        code[usize::from(program.id)] = Instruction::Jmp(section_ptr);
         // append program code at the end of executable
         code.extend(program.code.clone());
     }
@@ -226,15 +223,15 @@ pub fn assemble<
         // validate
         for (jmp_i, op) in exec.code[1..src_ns.len()].iter().cloned().enumerate() {
             match op {
-                Instruction::Jmp { ptr } => {
+                Instruction::Jmp(ptr) => {
                     let jmp_i = jmp_i + 1;
 
-                    let src_program = src_ns.get_program(&jmp_i)
+                    let src_program = src_ns.get_program(&U48::from(jmp_i))
                         .ok_or(compiler_error!("Couldn't find source program: {}", jmp_i))?;
 
-                    let mut i = ptr;
+                    let mut i = usize::from(ptr);
                     while !exec.code[i].cmp_type(&Instruction::Exit) {
-                        let rel_i = i - ptr;
+                        let rel_i = i - usize::from(ptr);
                         let asm_op = &exec.code[i];
                         let src_op = &src_program.code[rel_i];
                         if !src_op.cmp_type(asm_op) {

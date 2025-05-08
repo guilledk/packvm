@@ -1,4 +1,161 @@
-use core::fmt::{self, Debug, Display};
+use std::fmt;
+use std::ops::{Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign, Mul, MulAssign, Not, Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+
+/// Unsigned 48-bit integer kept in the low 48 bits of a `u64`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
+#[repr(transparent)]
+pub struct U48(pub u64);
+
+const MASK: u64 = 0xFFFF_FFFF_FFFF;
+
+
+impl From<u64> for U48 {
+    #[inline(always)]
+    fn from(value: u64) -> Self {
+        U48(value & MASK)  // truncates the upper 16 bits
+    }
+}
+
+impl From<usize> for U48 {
+    #[inline(always)]
+    fn from(value: usize) -> Self {
+        U48(value as u64 & MASK)
+    }
+}
+
+impl From<&[u8; 6]> for U48 {
+    #[inline(always)]
+    fn from(b: &[u8; 6]) -> Self {
+        U48(
+            (b[0] as u64)
+                | (b[1] as u64) <<  8
+                | (b[2] as u64) << 16
+                | (b[3] as u64) << 24
+                | (b[4] as u64) << 32
+                | (b[5] as u64) << 40,
+        )
+    }
+}
+
+impl From<U48> for [u8; 6] {
+    #[inline(always)]
+    fn from(v: U48) -> Self {
+        let n = v.0 & MASK;
+        [
+            n as u8,
+            (n >>  8) as u8,
+            (n >> 16) as u8,
+            (n >> 24) as u8,
+            (n >> 32) as u8,
+            (n >> 40) as u8,
+        ]
+    }
+}
+
+impl From<U48> for u64 {
+    #[inline(always)]
+    fn from(v: U48) -> Self {
+        v.0
+    }
+}
+
+impl From<U48> for usize {
+    #[inline(always)]
+    fn from(v: U48) -> Self {
+        v.0 as usize
+    }
+}
+
+impl fmt::Display for U48 {
+    #[inline(always)]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl fmt::Debug for U48 {
+    #[inline(always)]
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+macro_rules! impl_bin_op {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl $trait for U48 {
+            type Output = Self;
+            #[inline(always)]
+            fn $method(self, rhs: Self) -> Self::Output {
+                U48((self.0 $op rhs.0) & MASK)
+            }
+        }
+        impl $trait<u64> for U48 {
+            type Output = Self;
+            #[inline(always)]
+            fn $method(self, rhs: u64) -> Self::Output {
+                U48((self.0 $op (rhs & MASK)) & MASK)
+            }
+        }
+        impl $trait<U48> for u64 {
+            type Output = U48;
+            #[inline(always)]
+            fn $method(self, rhs: U48) -> Self::Output {
+                U48(((self & MASK) $op rhs.0) & MASK)
+            }
+        }
+    };
+}
+
+macro_rules! impl_assign_op {
+    ($trait:ident, $method:ident, $op:tt) => {
+        impl $trait for U48 {
+            #[inline(always)]
+            fn $method(&mut self, rhs: Self) {
+                self.0 = (self.0 $op rhs.0) & MASK;
+            }
+        }
+        impl $trait<u64> for U48 {
+            #[inline(always)]
+            fn $method(&mut self, rhs: u64) {
+                self.0 = (self.0 $op (rhs & MASK)) & MASK;
+            }
+        }
+    };
+}
+
+impl_bin_op!(Add, add, +);
+impl_bin_op!(Sub, sub, -);
+impl_bin_op!(Mul, mul, *);
+impl_bin_op!(Div, div, /);
+impl_bin_op!(Rem, rem, %);
+
+impl_assign_op!(AddAssign, add_assign, +);
+impl_assign_op!(SubAssign, sub_assign, -);
+impl_assign_op!(MulAssign, mul_assign, *);
+impl_assign_op!(DivAssign, div_assign, /);
+impl_assign_op!(RemAssign, rem_assign, %);
+
+impl_bin_op!(BitAnd, bitand, &);
+impl_bin_op!(BitOr,  bitor,  |);
+impl_bin_op!(BitXor, bitxor, ^);
+impl_bin_op!(Shl,    shl,   <<);
+impl_bin_op!(Shr,    shr,   >>);
+
+impl_assign_op!(BitAndAssign, bitand_assign, &);
+impl_assign_op!(BitOrAssign,  bitor_assign,  |);
+impl_assign_op!(BitXorAssign, bitxor_assign, ^);
+impl_assign_op!(ShlAssign,    shl_assign,   <<);
+impl_assign_op!(ShrAssign,    shr_assign,   >>);
+
+impl Not for U48 {
+    type Output = Self;
+    #[inline(always)]
+    fn not(self) -> Self::Output {
+        U48((!self.0) & MASK)
+    }
+}
+
+// Variable length representations
 
 macro_rules! numeric_wrapper {
     (
@@ -33,17 +190,17 @@ macro_rules! numeric_wrapper {
             }
         }
 
-        impl Debug for $name {
+        impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                Debug::fmt(&self.n, f)
+                fmt::Debug::fmt(&self.n, f)
             }
         }
 
-        impl Display for $name {
+        impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 match self.n {
-                    $priv::$pos_variant(v) => Display::fmt(&v, f),
-                    $priv::$neg_variant(v) => Display::fmt(&v, f),
+                    $priv::$pos_variant(v) => fmt::Display::fmt(&v, f),
+                    $priv::$neg_variant(v) => fmt::Display::fmt(&v, f),
                 }
             }
         }
@@ -187,17 +344,17 @@ impl Float {
     }
 }
 
-impl Debug for Float {
+impl fmt::Debug for Float {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        Debug::fmt(&self.n, f)
+        fmt::Debug::fmt(&self.n, f)
     }
 }
 
-impl Display for Float {
+impl fmt::Display for Float {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.n {
-            FloatPriv::F64(v) => Display::fmt(&v, f),
-            FloatPriv::F32(v) => Display::fmt(&v, f),
+            FloatPriv::F64(v) => fmt::Display::fmt(&v, f),
+            FloatPriv::F32(v) => fmt::Display::fmt(&v, f),
         }
     }
 }

@@ -15,7 +15,7 @@ use packvm::{PackVM, Value, Instruction, compiler::{
     ProgramNamespace,
     antelope::AntelopeSourceCode,
 }, compile_source, assemble, run_pack};
-use packvm::utils::numbers::{Float, Integer, Long};
+use packvm::utils::numbers::{U48, Float, Integer, Long};
 use packvm_macros::{VMStruct, VMEnum};
 
 const TESTABI: &str = include_str!("test_abi.json");
@@ -29,10 +29,10 @@ macro_rules! pack_and_assert {
         compile_type(&src, $type_name, &mut program).expect("failed to compile");
         program.code.push(Instruction::Exit);
         let mut ns = ProgramNamespace::from_source(&src);
-        ns.set_program(0, program);
+        ns.set_program(U48(1), program);
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let encoded = run_pack!(vm, 0, $value);
+        let encoded = run_pack!(vm, U48(1), $value);
         assert_eq!(encoded, $expected);
     }};
 }
