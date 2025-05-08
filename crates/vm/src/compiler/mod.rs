@@ -61,6 +61,16 @@ macro_rules! compile_source {
     }
 }
 
+#[macro_export]
+macro_rules! get_str_or_unknown {
+    ($str_map:expr, $id:expr) => {
+        match $str_map.get_by_left(&$id) {
+            Some(s) => s.clone(),
+            None => format!("unknown str({})", $id),
+        }
+    };
+}
+
 pub trait TypeAlias {
     fn new_type_name(&self) -> &str;
     fn from_type_name(&self) -> &str;
@@ -105,12 +115,15 @@ pub trait SourceCode<
             Some(name) => name,
             None => name.to_string(),
         };
+
+        // add one if found cause id 0 is reserved
+
         if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
-            return Some(id);
+            return Some(id + 1);
         }
 
         if let Some(id) = self.enums().iter().position(|s| s.name() == name) {
-            return Some(id + self.structs().len());
+            return Some(id + self.structs().len() + 1);
         }
 
         None
@@ -198,8 +211,9 @@ impl<
 
     pub fn calculate_string_map(&mut self) -> () {
         self.strings.clear();
-        let mut field_id = self.len();
-        for program in self.ns.values().collect::<Vec<&Program>>() {
+        self.strings.insert(0, "RESERVED".to_string());
+        let mut field_id = self.len() + 1;
+        for program in self.into_iter().cloned().collect::<Vec<Program>>() {
             self.strings.insert(program.id, program.name.clone());
             for string in &program.strings {
                 if self.strings.contains_right(string) {
@@ -208,6 +222,18 @@ impl<
                 self.strings.insert(field_id, string.clone());
                 field_id += 1;
             }
+        }
+        #[cfg(feature = "debug")]
+        {
+            let mut strings = self.strings.iter()
+                .map(|(id, s)| (*id, s.clone()))
+                .collect::<Vec<(usize, String)>>();
+            strings.sort();
+            debug_log!("Calulated string map: [");
+            for s in strings {
+                debug_log!("{:?}", s);
+            }
+            debug_log!("]");
         }
     }
 }
@@ -362,13 +388,12 @@ fn compile_array<
         type_name
     );
 
-    code.push(Instruction::PushCND(0));
+    code.push(Instruction::PushCND);
 
     code.push(compile_type_ops(src, type_name, depth)?);
 
     code.push(Instruction::JmpArrayCND(0));  // ptr will be filled by assembler == final pos of instruction - 1
-
-    code.push(Instruction::PopCND);
+    code.push(Instruction::PopCursor);
 
     Ok(code)
 }
@@ -403,15 +428,11 @@ fn compile_enum<
 
     let vars_count = variants.len();
 
-    let end_ptr = (vars_count * 3) + 1;
-
-    // finally build variant definition full code
-    // set condition to the length of the array from the stack
-    code.push(Instruction::PushCND(1));
+    let end_ptr = vars_count * 3;
 
     // variant index based jump table
     for (i, _var_name) in var_meta.variants().iter().enumerate() {
-        code.push(Instruction::JmpStructCND(i as u32, vars_count + i));
+        code.push(Instruction::JmpVariant(i as u32, vars_count + i));
     }
 
     // finally add each of the variant implementations code and their Jmp to post definition
@@ -421,8 +442,6 @@ fn compile_enum<
             code.push(Instruction::Jmp{ptr: end_ptr});
         }
     }
-
-    code.push(Instruction::PopCND);
 
     Ok(code)
 }
@@ -576,14 +595,6 @@ pub fn compile_program<
         2u8
     };
 
-    program.code.insert(
-        0,
-        Instruction::Section(
-            ctype,
-            program.id
-        )
-    );
-
     // gather dependencies
     for op in program.code.iter() {
         match op {
@@ -596,6 +607,17 @@ pub fn compile_program<
         }
     }
 
+    program.code.insert(
+        0,
+        Instruction::Section(
+            ctype,
+            program.id
+        )
+    );
+
+    if ctype == 2u8 {
+        program.code.push(Instruction::PopCursor);
+    }
     program.code.push(Instruction::Exit);
 
     debug_log!("\t\t{} compiled.", program_name);

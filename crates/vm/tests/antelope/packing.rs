@@ -8,20 +8,13 @@ use antelope::chain::abi::ShipABI;
 use antelope::chain::authority::{Authority, KeyWeight};
 use antelope::chain::name::Name;
 use antelope::chain::public_key::PublicKey;
-use packvm::{
-    PackVM,
-    Value,
-    Instruction,
-    compiler::{
-        compile_type,
-        Program,
-        SourceCode,
-        ProgramNamespace,
-        antelope::AntelopeSourceCode,
-    },
-    compile_source,
-    assemble
-};
+use packvm::{PackVM, Value, Instruction, compiler::{
+    compile_type,
+    Program,
+    SourceCode,
+    ProgramNamespace,
+    antelope::AntelopeSourceCode,
+}, compile_source, assemble, run_pack};
 use packvm::utils::numbers::{Float, Integer, Long};
 use packvm_macros::{VMStruct, VMEnum};
 
@@ -39,47 +32,47 @@ macro_rules! pack_and_assert {
         ns.set_program(0, program);
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let encoded = vm.run_pack(0, &$value).expect("Pack failed");
+        let encoded = run_pack!(vm, 0, $value);
         assert_eq!(encoded, $expected);
     }};
 }
 
 #[test]
 fn test_pack_bool() {
-    pack_and_assert!("bool", Value::Bool(true),  &[1u8]);
-    pack_and_assert!("bool", Value::Bool(false), &[0u8]);
+    pack_and_assert!("bool", &Value::Bool(true),  &[1u8]);
+    pack_and_assert!("bool", &Value::Bool(false), &[0u8]);
 }
 
 #[test]
 fn test_pack_uints() {
-    pack_and_assert!("uint8",   Value::Int(Integer::from(0x12u8)),                     &[0x12]);
-    pack_and_assert!("uint16",  Value::Int(Integer::from(0x1234u16)),                  &[0x34, 0x12]);
-    pack_and_assert!("uint32",  Value::Int(Integer::from(0x12345678u32)),              &[0x78, 0x56, 0x34, 0x12]);
-    pack_and_assert!("uint64",  Value::Int(Integer::from(0x1234567890abcdefu64)),      &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12]);
-    pack_and_assert!("uint128", Value::Long(Long::from(0x112233445566778899aabbccddeeff00u128)),
+    pack_and_assert!("uint8",   &Value::Int(Integer::from(0x12u8)),                     &[0x12]);
+    pack_and_assert!("uint16",  &Value::Int(Integer::from(0x1234u16)),                  &[0x34, 0x12]);
+    pack_and_assert!("uint32",  &Value::Int(Integer::from(0x12345678u32)),              &[0x78, 0x56, 0x34, 0x12]);
+    pack_and_assert!("uint64",  &Value::Int(Integer::from(0x1234567890abcdefu64)),      &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12]);
+    pack_and_assert!("uint128", &Value::Long(Long::from(0x112233445566778899aabbccddeeff00u128)),
                      &0x112233445566778899aabbccddeeff00u128.to_le_bytes());
 }
 
 #[test]
 fn test_pack_ints() {
-    pack_and_assert!("int8",   Value::Int(Integer::from(-1i8)),   &[0xff]);
-    pack_and_assert!("int16",  Value::Int(Integer::from(-2i16)),  &[0xfe, 0xff]);
-    pack_and_assert!("int32",  Value::Int(Integer::from(-3i32)),  &[0xfd, 0xff, 0xff, 0xff]);
-    pack_and_assert!("int64",  Value::Int(Integer::from(-4i64)),  &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-    pack_and_assert!("int128", Value::Long(Long::from(-5i128)),   &(-5i128).to_le_bytes());
+    pack_and_assert!("int8",   &Value::Int(Integer::from(-1i8)),   &[0xff]);
+    pack_and_assert!("int16",  &Value::Int(Integer::from(-2i16)),  &[0xfe, 0xff]);
+    pack_and_assert!("int32",  &Value::Int(Integer::from(-3i32)),  &[0xfd, 0xff, 0xff, 0xff]);
+    pack_and_assert!("int64",  &Value::Int(Integer::from(-4i64)),  &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
+    pack_and_assert!("int128", &Value::Long(Long::from(-5i128)),   &(-5i128).to_le_bytes());
 }
 
 #[test]
 fn test_pack_varuint32() {
-    pack_and_assert!("varuint32", Value::VarUInt32(0x7Fu32), &[0x7F]);
-    pack_and_assert!("varuint32", Value::VarUInt32(0x80u32), &[0x80, 0x01]);
+    pack_and_assert!("varuint32", &Value::VarUInt32(0x7Fu32), &[0x7F]);
+    pack_and_assert!("varuint32", &Value::VarUInt32(0x80u32), &[0x80, 0x01]);
 }
 
 #[test]
 fn test_pack_floats() {
-    pack_and_assert!("float32", Value::Float(Float::from(1.0f32)), &1.0f32.to_le_bytes());
-    pack_and_assert!("float64", Value::Float(Float::from(2.0f64)), &2.0f64.to_le_bytes());
-    pack_and_assert!("float128", Value::Float128([1u8; 16]), &[1u8; 16]);
+    pack_and_assert!("float32", &Value::Float(Float::from(1.0f32)), &1.0f32.to_le_bytes());
+    pack_and_assert!("float64", &Value::Float(Float::from(2.0f64)), &2.0f64.to_le_bytes());
+    pack_and_assert!("float128", &Value::Float128([1u8; 16]), &[1u8; 16]);
 }
 
 #[test]
@@ -87,14 +80,14 @@ fn test_pack_bytes() {
     let mut enc = Encoder::new(0);
     let raw = vec![1u8, 2u8, 3u8];
     raw.pack(&mut enc);
-    pack_and_assert!("bytes", Value::Bytes(raw), enc.get_bytes());
+    pack_and_assert!("bytes", &Value::Bytes(raw), enc.get_bytes());
 }
 
 #[test]
 fn test_pack_string() {
     let mut enc = Encoder::new(0);
     "abc".to_string().pack(&mut enc);
-    pack_and_assert!("string", Value::String("abc".to_string()), enc.get_bytes());
+    pack_and_assert!("string", &Value::String("abc".to_string()), enc.get_bytes());
 }
 
 #[test]
@@ -104,7 +97,7 @@ fn test_pack_array() {
     actual.pack(&mut enc);
     pack_and_assert!(
         "uint32[]",
-        Value::Array(vec![Integer::from(1u32).into(), Integer::from(2u32).into()]),
+        &Value::Array(vec![Integer::from(1u32).into(), Integer::from(2u32).into()]),
         enc.get_bytes()
     );
 
@@ -113,7 +106,7 @@ fn test_pack_array() {
     actual.pack(&mut enc);
     pack_and_assert!(
         "uint32[]",
-        Value::Array(Vec::<Value>::new()),
+        &Value::Array(Vec::<Value>::new()),
         enc.get_bytes()
     );
 }
@@ -122,19 +115,19 @@ fn test_pack_array() {
 fn test_pack_option() {
     let mut enc = Encoder::new(0);
     Some(1u32).pack(&mut enc);
-    pack_and_assert!("uint32?", Value::Int(Integer::from(1u32)), enc.get_bytes());
+    pack_and_assert!("uint32?", &Value::Int(Integer::from(1u32)), enc.get_bytes());
 
     let mut enc = Encoder::new(0);
     None::<u32>.pack(&mut enc);
-    pack_and_assert!("uint32?", Value::None, enc.get_bytes());
+    pack_and_assert!("uint32?", &Value::None, enc.get_bytes());
 }
 
 #[test]
 fn test_pack_extension() {
-    pack_and_assert!("uint32$", Value::Int(Integer::from(1u32)), &[1, 0, 0, 0]);
+    pack_and_assert!("uint32$", &Value::Int(Integer::from(1u32)), &[1, 0, 0, 0]);
 
     let empty: [u8; 0] = [];
-    pack_and_assert!("uint32$", Value::None, &empty);
+    pack_and_assert!("uint32$", &Value::None, &empty);
 }
 
 #[test]
@@ -222,7 +215,7 @@ fn test_pack_struct() {
     let pid = src.program_id_for("test_struct").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let encoded = vm.run_pack(pid, &val).expect("Pack failed");
+    let encoded = run_pack!(vm, pid, &val);
     assert_eq!(encoded, enc.get_bytes());
 }
 
@@ -243,7 +236,7 @@ fn test_pack_get_status_request_v0() {
             0
         }
 
-        fn unpack(&mut self, _data: &[u8]) -> Result<usize, antelope::serializer::PackerError> {
+        fn unpack(&mut self, _data: &[u8]) -> Result<usize, PackerError> {
             Ok(0)
         }
     }
@@ -255,9 +248,10 @@ fn test_pack_get_status_request_v0() {
     }
 
     let test = Request::GetStatus(GetStatusRequestV0);
-    let input: Value = test.into();
+    let mut encoder = Encoder::new(0);
+    test.pack(&mut encoder);
 
-    println!("{:?}", input);
+    let input: Value = test.into();
 
     let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
@@ -266,8 +260,9 @@ fn test_pack_get_status_request_v0() {
 
     let pid = src.program_id_for("request").expect("failed to get program");
     let mut vm = PackVM::from_executable(code);
-    let encoded = vm.run_pack(pid, &input).expect("Pack failed");
-    println!("{:?}", encoded);
+    let encoded = run_pack!(vm, pid, &input);
+
+    assert_eq!(encoded.as_slice(), encoder.get_bytes());
 }
 
 const EOSIOABI: &str = include_str!("eosio.system.json");
@@ -321,7 +316,7 @@ fn test_pack_newaccount() {
 
     let pid = src.program_id_for("newaccount").expect("failed to get program");
     let mut vm = PackVM::from_executable(code);
-    let encoded = vm.run_pack(pid, &value).expect("Pack failed");
+    let encoded = run_pack!(vm, pid, &value);
 
     assert_eq!(encoded, params_raw);
 

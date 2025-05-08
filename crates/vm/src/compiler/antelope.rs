@@ -114,7 +114,7 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<Ab
         ("time_point_sec", "u32"),
         ("block_timestamp_type", "u32"),
 
-        ("public_key", "raw"),
+        ("public_key", "raw(34)"),
         ("signature", "raw(66)"),
 
     ] {

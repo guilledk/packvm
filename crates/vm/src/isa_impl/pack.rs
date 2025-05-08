@@ -1,498 +1,489 @@
+#![allow(clippy::match_same_arms)]
+
 use tailcall::tailcall;
-use crate::{exit, jmp, packer_error, popcnd, jmpret, section, field, jmpacnd, jmpscnd};
+
 use crate::{
-    utils::{
-        PackerError,
-        varint::{
-            VarUInt32, VarInt32
-        },
-    },
-    runtime::NamespacePart,
+    debug_log, exit, field,
     isa_impl::common::OpResult,
-    Value,
-    Instruction,
-    PackVM
+    jmp, jmpret, jmpscnd, packer_error, popcursor,
+    utils::varint::{VarInt32, VarUInt32},
+    Instruction, PackVM, Value,
 };
 
-macro_rules! type_mismatch {
-    ($expected:expr, $got:ident) => {
-        Err(packer_error!("Expected {}, got {:?}", $expected, $got))
-    };
-}
+macro_rules! vmgetio {
+    ($vm:ident) => {{
+        let cnd = $vm.cnd();
+        let val = $vm.cursor.current();
+        match val {
+            Value::Array(arr) if cnd > 0 => {
+                let idx = arr.len() - cnd as usize;
+                Ok(&arr[idx])
+            }
+            Value::Struct(map) if $vm.fp != 0 => {
+                let fname =
+                    $vm.executable
+                        .str_map
+                        .get_by_left(&$vm.fp)
+                        .ok_or(crate::packer_error!(
+                            "Failed to resolve struct field name from id: {}",
+                            $vm.fp
+                        ))?;
 
-#[cfg(feature = "debug")]
-macro_rules! vmlog {
-    ($vm:expr, $instr:expr, $($args:tt)*) => {{
-        println!(
-            "ip({:4}) cnd({:4})          | {:80} | ionsp: {}",
-            $vm.ip, $vm.cnd(),
-            &format!("{}{}", $instr, format_args!($($args)*)),
-            $vm.nsp_string(),
-        );
+                map.get(fname).ok_or(packer_error!(
+                    "Failed to get field from id: {}, {}: {:#?}",
+                    $vm.fp,
+                    fname,
+                    map
+                ))
+            }
+            _ => Ok(val),
+        }
     }};
 }
 
-#[cfg(not(feature = "debug"))]
-macro_rules! vmlog {
-    ($vm:expr, $instr:expr, $($args:tt)*) => {{}};
-}
-
-
-// allow unreachable due to how the tailcall macro expands
-#[allow(unreachable_code)]
-#[tailcall]
-fn vmio<'a>(
-    vm: &PackVM,
-    io: &'a Value,
-    nsp: &[NamespacePart],
-    cndstack: &[u32]
-) -> Result<Option<&'a Value>, PackerError> {
-    // out-of recursion: nothing left to consume, return the current slot
-    if nsp.is_empty() {
-        return Ok(Some(io));
-    }
-
-    match &nsp[0] {
-        // root case
-        NamespacePart::Root => vmio(vm, io, &nsp[1..], &cndstack[1..]),
-
-        // array indexing
-        NamespacePart::ArrayIndex => {
-            if let Value::Array(arr) = io {
-                let index = arr.len() - cndstack[0] as usize;
-                vmio(vm, &arr[index], &nsp[1..], &cndstack[1..])
-            } else {
-                Err(packer_error!("expected Value::Array at {:?}, io: {:#?}", nsp, io))
+macro_rules! vmgetio_mut {
+    ($vm:ident) => {{
+        let cnd = $vm.cnd();
+        let val = $vm.cursor.current_mut();
+        match val {
+            Value::Array(arr) if cnd > 0 => {
+                let idx = arr.len() - cnd as usize;
+                Ok(&mut arr[idx])
             }
-        }
+            Value::Struct(map) if $vm.fp != 0 => {
+                let fname =
+                    $vm.executable
+                        .str_map
+                        .get_by_left(&$vm.fp)
+                        .ok_or(crate::packer_error!(
+                            "Failed to resolve struct field name from id: {}",
+                            $vm.fp
+                        ))?;
 
-        // struct field access
-        NamespacePart::StructField(name) => {
-            if let Value::Struct(fields) = io {
-                let cndstack = if fields.contains_key("type") {
-                    &cndstack[1..]
-                } else {
-                    cndstack
-                };
-                if let Some(val) = fields.get(name) {
-                    vmio(vm, val, &nsp[1..], cndstack)
-                } else {
-                    Ok(None)
-                }
-            } else {
-                Err(packer_error!("expected Value::Struct at {:?}, io: {:#?}", nsp, io))
+                map.get_mut(fname).ok_or(packer_error!(
+                    "Failed to get field from id: {}, {}",
+                    $vm.fp,
+                    fname
+                ))
             }
+            _ => Ok(val),
         }
-
-        _ => {
-            vmio(vm, io, &nsp[1..], cndstack)
-        }
-    }
+    }};
 }
 
-macro_rules! vmgetio {
-    ($vm:ident, $io:ident) => {
-        vmio($vm, $io, $vm.ionsp.as_slice(), $vm.cndstack.as_slice())?
-    };
-}
-
+/// Current slot, but ensure it is of the expected variant.
 macro_rules! vmgetio_expect {
-    ($vm:ident, $io:ident, $expect:ident) => {
-        vmio($vm, $io, $vm.ionsp.as_slice(), $vm.cndstack.as_slice()).map_err(
-            |e|
-            packer_error!(
-                "expected vmgetio to return Some({}) but got {}",
-                stringify!($expect),
-                e.to_string()
-            )
-        )?
-        .ok_or(
-            packer_error!(
-                "expected vmgetio to return Some({}) but got None",
-                stringify!($expect),
-            )
-        )?
-    };
+    ($vm:ident, $variant:pat_param, $name:literal) => {{
+        let v = vmgetio!($vm)?;
+        if !matches!(v, $variant) {
+            return Err(packer_error!("Expected {}, got {:?}", $name, v));
+        }
+        v
+    }};
 }
 
+/// Advance the instruction pointer by 1.
 macro_rules! vmstep {
     ($vm:ident) => {
         $vm.ip += 1;
     };
 }
 
+/// Append raw bytes to the output buffer.
 macro_rules! vmpack {
-    ($vm:ident, $buf:ident, $val:expr) => {
-        $buf.extend_from_slice($val);
+    ($vm:ident, $buf:ident, $bytes:expr) => {{
+        $buf.extend_from_slice($bytes);
+        $vm.bp = $buf.len() - 1;
+    }};
+}
+
+#[inline(always)]
+fn integer(vm: &mut PackVM, buf: &mut Vec<u8>, size: u8, signed: bool) -> OpResult {
+    let val = vmgetio_expect!(vm, Value::Int(_), "Int");
+    let n = match val {
+        Value::Int(n) => n,
+        _ => unreachable!(),
     };
-}
 
-#[inline(always)]
-pub fn integer(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, size: u8, signed: bool) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Int);
-    match val {
-        Value::Int(num) => {
-            if signed {
-                match size {
-                    1 => {
-                        let num = num.as_i64().unwrap() as i8;
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    2 => {
-                        let num = num.as_i64().unwrap() as i16;
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    4 => {
-                        let num = num.as_i64().unwrap() as i32;
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    8 => {
-                        let num = num.as_i64().unwrap();
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    _ => unreachable!(),
-                }
-            } else {
-                match size {
-                    1 => {
-                        let num = num.as_u64().unwrap() as u8;
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    2 => {
-                        let num = num.as_u64().unwrap() as u16;
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    4 => {
-                        let num = num.as_u64().unwrap() as u32;
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    8 => {
-                        let num = num.as_u64().unwrap();
-                        vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                    }
-                    _ => unreachable!(),
-                }
-            }
+    if signed {
+        match size {
+            1 => vmpack!(vm, buf, &(n.as_i64().unwrap() as i8).to_le_bytes()),
+            2 => vmpack!(vm, buf, &(n.as_i64().unwrap() as i16).to_le_bytes()),
+            4 => vmpack!(vm, buf, &(n.as_i64().unwrap() as i32).to_le_bytes()),
+            8 => vmpack!(vm, buf, &n.as_i64().unwrap().to_le_bytes()),
+            _ => unreachable!(),
         }
-        _ => return type_mismatch!("Int", val)
-    }
-    vmstep!(vm);
-    vmlog!(vm, "int", "({}, {})", size, signed);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn long(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, signed: bool) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Long);
-    match val {
-        Value::Long(num) => {
-            if signed {
-                let num = num.as_i128().unwrap();
-                vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-            } else {
-                let num = num.as_u128().unwrap();
-                vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-            }
-        }
-        _ => return type_mismatch!("Long", val)
-    }
-    vmstep!(vm);
-    vmlog!(vm, "long", "({})", signed);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn float(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, size: u8) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Float);
-    match val {
-        Value::Float(num) => {
-            match size {
-                4 => {
-                    let num: f32 = num.as_f32().unwrap();
-                    vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                }
-                8 => {
-                    let num: f64 = num.as_f64();
-                    vmpack!(vm, buffer, num.to_le_bytes().as_ref());
-                }
-                _ => unreachable!(),
-            }
-        }
-        _ => return type_mismatch!("Int", val)
-    }
-    vmstep!(vm);
-    vmlog!(vm, "float", "({})", size);
-    Ok(())
-}
-
-const TRUE_BYTES: [u8; 1] = [1u8];
-const FALSE_BYTES: [u8; 1] = [0u8];
-
-#[inline(always)]
-pub fn boolean(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Bool);
-    match val {
-        Value::Bool(v) => {
-            let flag = match v {
-                true => &TRUE_BYTES,
-                false => &FALSE_BYTES,
-            };
-            vmpack!(vm, buffer, flag);
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("VarUInt32", val)
-    }
-    vmlog!(vm, "varuint32", "()");
-    Ok(())
-}
-
-#[inline(always)]
-pub fn varuint32(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let val = vmgetio_expect!(vm, io, VarUInt32);
-    match val {
-        Value::VarUInt32(v) => {
-            let (raw, size) = VarUInt32(*v).encode();
-            vmpack!(vm, buffer, &raw[..size]);
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("VarUInt32", val)
-    }
-    vmlog!(vm, "varuint32", "()");
-    Ok(())
-}
-
-#[inline(always)]
-pub fn varint32(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let val = vmgetio_expect!(vm, io, VarInt32);
-    match val {
-        Value::VarInt32(v) => {
-            let (raw, size) = VarInt32(*v).encode();
-            vmpack!(vm, buffer, &raw[..size]);
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("VarUInt32", val)
-    }
-    vmlog!(vm, "varuint32", "()");
-    Ok(())
-}
-
-#[inline(always)]
-pub fn float128(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Float128);
-    match val {
-        Value::Float128(v) => {
-            vmpack!(vm, buffer, v);
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("Float128", val)
-    }
-    vmlog!(vm, "float128", "()");
-    Ok(())
-}
-
-#[inline(always)]
-pub fn bytes(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Bytes);
-    match val {
-        Value::Bytes(v) => {
-            let (size_raw, size_len) = VarUInt32(v.len() as u32).encode();
-            let mut array = Vec::with_capacity(size_len + v.len());
-            array.extend_from_slice(&size_raw[..size_len]);
-            array.extend_from_slice(&v);
-            vmpack!(vm, buffer, array.as_slice());
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("Bytes", val)
-    }
-    vmlog!(vm, "bytes", "()");
-    Ok(())
-}
-
-#[inline(always)]
-pub fn string(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let val = vmgetio_expect!(vm, io, String);
-    match val {
-        Value::String(s) => {
-            let (size_raw, size_len) = VarUInt32(s.len() as u32).encode();
-            let mut array = Vec::with_capacity(size_len + s.len());
-            array.extend_from_slice(&size_raw[..size_len]);
-            array.extend_from_slice(s.as_bytes());
-            vmpack!(vm, buffer, array.as_slice());
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("String", val)
-    }
-    vmlog!(vm, "string", "()");
-    Ok(())
-}
-
-#[inline(always)]
-pub fn bytes_raw(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, len: usize) -> OpResult {
-    let val = vmgetio_expect!(vm, io, Bytes);
-    match val {
-        Value::Bytes(v) => {
-            if len > 0 && v.len() != len {
-                return Err(packer_error!("Raw bytes fixed size mistmatch: {} != {}", v.len(), len))
-            }
-            vmpack!(vm, buffer, v);
-            vmstep!(vm);
-        }
-        _ => return type_mismatch!("Bytes", val)
-    }
-    vmlog!(vm, "bytes_raw", "({})", len);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn optional(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> OpResult {
-    let b = match vmgetio_expect!(vm, io, Optional) {
-        Value::None => {
-            vm.ip += 2;   // jump over wrapped code
-            vmlog!(vm, "optional none", "()");
-            0u8
-        }
-        _ => {
-            vm.ip += 1;                     // execute wrapped code next
-            vmlog!(vm, "optional some", "()");
-            1u8
-        }
-    };
-    buffer.push(b);
-    Ok(())
-}
-
-#[inline(always)]
-pub fn extension(vm: &mut PackVM, io: &Value) -> OpResult {
-    match vmgetio!(vm, io) {
-        Some(Value::None) => {
-            vm.ip += 2;       // jump over wrapped code
-            vmlog!(vm, "extension none", "()");
-        }
-
-        Some(_) => {
-            vm.ip += 1;
-            vmlog!(vm, "extension", "()");
-        }
-
-        None => {
-            vm.ip += 2;       // skip wrapped code
-            vmlog!(vm, "extension stack empty", "()");
-        }
-    }
-    Ok(())
-}
-
-#[inline(always)]
-pub fn pushcnd(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>, ctype: u8) -> OpResult {
-    let val = vmgetio_expect!(vm, io, AnyPushCND);
-    let cnd: Option<u32> = match val {
-        Value::Array(values) => {
-            if !values.is_empty() {
-                vm.ionsp.push(NamespacePart::ArrayNode);
-                vm.ionsp.push(NamespacePart::ArrayIndex);
-                Some(values.len() as u32)
-            } else {
-                None
-            }
-        }
-        Value::Struct(fields) => {
-            let type_field = fields.get("type")
-                .ok_or(packer_error!("Cant find type field in enum struct: {:?}", fields))?;
-
-            match type_field {
-                Value::Int(cnd) => {
-                    Some(cnd.as_u64().unwrap() as u32)
-                }
-                _ => return type_mismatch!("Enum variant id Value::UInt32", val)
-            }
-        }
-        _ => {
-            return match ctype {
-                0u8 => {
-                    type_mismatch!("Array", val)
-                }
-                1u8 => {
-                    type_mismatch!("Struct", val)
-                }
-                _ => unreachable!()
-            }
-        }
-    };
-    if let Some(cnd) = cnd {
-        vm.cndstack.push(cnd);
-        let (size_raw, size_len) = VarUInt32(cnd).encode();
-        vmpack!(vm, buffer, &size_raw[..size_len]);
-        vmstep!(vm);
     } else {
-        vmpack!(vm, buffer, &[0]);
-        let next_popcnd = vm.executable.code[vm.ip..].iter()
-            .position(|op| match op {
-                Instruction::PopCND => true,
-                _ => false,
-            })
-            .ok_or(packer_error!("Can't find next CND pop"))?;
-
-        vm.ip += next_popcnd + 1;
+        match size {
+            1 => vmpack!(vm, buf, &(n.as_u64().unwrap() as u8).to_le_bytes()),
+            2 => vmpack!(vm, buf, &(n.as_u64().unwrap() as u16).to_le_bytes()),
+            4 => vmpack!(vm, buf, &(n.as_u64().unwrap() as u32).to_le_bytes()),
+            8 => vmpack!(vm, buf, &n.as_u64().unwrap().to_le_bytes()),
+            _ => unreachable!(),
+        }
     }
-    vmlog!(vm, "pushcnd", "({}) io -> {}", ctype, vm.cndstack.last().unwrap());
+
+    vmstep!(vm);
     Ok(())
 }
 
-#[tailcall]
-pub fn exec(vm: &mut PackVM, io: &Value, buffer: &mut Vec<u8>) -> Result<(), PackerError> {
-    match vm.executable.code[vm.ip] {
-        Instruction::Bool => { boolean(vm, io, buffer)?; exec(vm, io, buffer) }
+#[inline(always)]
+fn long(vm: &mut PackVM, buf: &mut Vec<u8>, signed: bool) -> OpResult {
+    let val = vmgetio_expect!(vm, Value::Long(_), "Long");
+    let n = match val {
+        Value::Long(n) => n,
+        _ => unreachable!(),
+    };
 
-        Instruction::UInt {size} => {
-            if size == 16 {
-                long(vm, io, buffer, false)?
-            } else {
-                integer(vm, io, buffer, size, false)?
-            };
-            exec(vm, io, buffer)
+    if signed {
+        vmpack!(vm, buf, &n.as_i128().unwrap().to_le_bytes());
+    } else {
+        vmpack!(vm, buf, &n.as_u128().unwrap().to_le_bytes());
+    }
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn boolean(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::Bool(_), "Bool");
+    let b = matches!(v, Value::Bool(true)) as u8;
+    buf.push(b);
+    vm.bp += 1;
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn float(vm: &mut PackVM, buf: &mut Vec<u8>, size: u8) -> OpResult {
+    let val = vmgetio_expect!(vm, Value::Float(_), "Float");
+    match (val, size) {
+        (Value::Float(n), 4) => vmpack!(vm, buf, &(n.as_f32().unwrap()).to_le_bytes()),
+        (Value::Float(n), 8) => vmpack!(vm, buf, &(n.as_f64()).to_le_bytes()),
+        _ => return Err(packer_error!("Invalid float size/type")),
+    };
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn float128(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::Float128(_), "Float128");
+    if let Value::Float128(arr) = v {
+        vmpack!(vm, buf, arr);
+    }
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn varuint32(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::VarUInt32(_), "VarUInt32");
+    let n = if let Value::VarUInt32(n) = v {
+        *n
+    } else {
+        unreachable!()
+    };
+    let (raw, len) = VarUInt32(n).encode();
+    vmpack!(vm, buf, &raw[..len]);
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn varint32(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::VarInt32(_), "VarInt32");
+    let n = if let Value::VarInt32(n) = v {
+        *n
+    } else {
+        unreachable!()
+    };
+    let (raw, len) = VarInt32(n).encode();
+    vmpack!(vm, buf, &raw[..len]);
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn bytes(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::Bytes(_), "Bytes");
+    let bytes = if let Value::Bytes(b) = v {
+        b
+    } else {
+        unreachable!()
+    };
+
+    let (size_raw, size_len) = VarUInt32(bytes.len() as u32).encode();
+    vmpack!(vm, buf, &size_raw[..size_len]);
+    vmpack!(vm, buf, &bytes);
+
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn string(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::String(_), "String");
+    let s = if let Value::String(s) = v {
+        s
+    } else {
+        unreachable!()
+    };
+
+    let (size_raw, size_len) = VarUInt32(s.len() as u32).encode();
+    vmpack!(vm, buf, &size_raw[..size_len]);
+    vmpack!(vm, buf, s.as_bytes());
+
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn bytes_raw(vm: &mut PackVM, buf: &mut Vec<u8>, len: usize) -> OpResult {
+    let v = vmgetio_expect!(vm, Value::Bytes(_), "Bytes");
+    let bytes = if let Value::Bytes(b) = v {
+        b
+    } else {
+        unreachable!()
+    };
+
+    if len != 0 && bytes.len() != len {
+        return Err(packer_error!(
+            "Raw bytes fixed-size mismatch: {} != {}",
+            bytes.len(),
+            len
+        ));
+    }
+    vmpack!(vm, buf, &bytes);
+    vmstep!(vm);
+    Ok(())
+}
+
+#[inline(always)]
+fn optional(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    match vmgetio!(vm)? {
+        Value::None => {
+            buf.push(0);
+            vm.ip += 2; // skip wrapped ops
         }
-        Instruction::Int {size} => {
-            if size == 16 {
-                long(vm, io, buffer, true)?
-            } else {
-                integer(vm, io, buffer, size, true)?
-            };
-            exec(vm, io, buffer)
+        _ => {
+            buf.push(1);
+            vmstep!(vm); // run wrapped ops next
         }
+    }
+    vm.bp += 1;
+    Ok(())
+}
 
-        Instruction::VarUInt => { varuint32(vm, io, buffer)?; exec(vm, io, buffer) }
-        Instruction::VarInt => { varint32(vm, io, buffer)?; exec(vm, io, buffer) },
+#[inline(always)]
+fn extension(vm: &mut PackVM) -> OpResult {
+    match vmgetio!(vm)? {
+        Value::None => {
+            vm.ip += 2; // skip inner ops
+        }
+        _ => {
+            vmstep!(vm);
+        }
+    }
+    Ok(())
+}
 
-        Instruction::Float {size} => {
-            match size {
-                4 | 8 => { float(vm, io, buffer, size)?; exec(vm, io, buffer) },
-                16 => { float128(vm, io, buffer)?; exec(vm, io, buffer) },
-                _ => unreachable!()
+#[inline(always)]
+fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    let cnd = {
+        let mut child_ptr: *mut Value = std::ptr::null_mut();
+        let slot = vmgetio_mut!(vm)?;
+        let cnd = match slot {
+            Value::Array(arr) => {
+                if !arr.is_empty() {
+                    let cnd = arr.len() as u32;
+                    vm.cndstack.push(cnd);
+                    vmstep!(vm);
+                    child_ptr = slot as *mut _;
+                    cnd
+                } else {
+                    let next_popcnd = vm.executable.code[vm.ip..]
+                        .iter()
+                        .position(|op| op.cmp_type(&Instruction::PopCursor))
+                        .ok_or(packer_error!("Can't find next CND pop"))?;
+
+                    vm.ip += next_popcnd + 1;
+                    0
+                }
             }
+            v => return Err(packer_error!("Expected Array, got {:?}", v)),
+        };
+
+        if !child_ptr.is_null() {
+            unsafe { vm.cursor.push(child_ptr) };
         }
 
-        Instruction::Bytes => { bytes(vm, io, buffer)?; exec(vm, io, buffer) }
-        Instruction::BytesRaw{ size } => { bytes_raw(vm, io, buffer, size)?; exec(vm, io, buffer) }
-        Instruction::String => { string(vm, io, buffer)?; exec(vm, io, buffer) }
+        cnd
+    };
 
-        Instruction::Optional => { optional(vm, io, buffer)?; exec(vm, io, buffer) }
-        Instruction::Extension => { extension(vm, io)?; exec(vm, io, buffer) }
+    let (raw, len) = VarUInt32(cnd).encode();
+    vmpack!(vm, buf, &raw[..len]);
 
-        Instruction::PushCND(ctype) => { pushcnd(vm, io, buffer, ctype)?; exec(vm, io, buffer) }
-        Instruction::PopCND => { popcnd!(vm)?; exec(vm, io, buffer) }
-        Instruction::Jmp{ ptr} => { jmp!(vm, ptr)?; exec(vm, io, buffer) }
-        Instruction::JmpRet{ptr} => { jmpret!(vm, ptr); exec(vm, io, buffer) }
-        Instruction::JmpArrayCND(ptr) => { jmpacnd!(vm, ptr)?; exec(vm, io, buffer) }
-        Instruction::JmpStructCND(variant, ptr) => { jmpscnd!(vm, variant, ptr)?; exec(vm, io, buffer) }
+    Ok(())
+}
+
+#[inline(always)]
+fn jmpacnd(vm: &mut PackVM, ptr: usize) -> OpResult {
+    let cnd = vm.cnd_mut();
+    *cnd -= 1;
+    let cnd = *cnd;
+    if cnd > 0 {
+        vm.ip = ptr;
+    } else {
+        if vm.cursor.len() > 1 {
+            vm.cndstack.pop();
+        }
+        vm.ip += 1;
+    }
+    Ok(())
+}
+
+#[inline(always)]
+#[cfg_attr(not(feature = "debug"), allow(unused_variables))]
+fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
+    let child_ptr: *mut Value;
+
+    {
+        let slot = vmgetio_mut!(vm)?;
+        match slot {
+            Value::Struct(map) => {
+                if ctype == 1 {
+                    /* enum-struct: encode the variant id */
+                    let type_field = map.get("type").ok_or_else(|| {
+                        packer_error!("enum struct missing `type` field: {:?}", map)
+                    })?;
+
+                    let variant_id = match type_field {
+                        Value::Int(n) => n.as_u64().unwrap() as u32,
+                        _ => return Err(packer_error!("`type` field is not Int")),
+                    };
+
+                    let (raw, len) = VarUInt32(variant_id).encode();
+                    buf.extend_from_slice(&raw[..len]);
+
+                    vm.et = variant_id;
+                }
+            }
+            _ => return Err(packer_error!("section: expected Struct, got {:?}", slot)),
+        }
+        child_ptr = slot as *mut _;
+    }
+
+    if ctype == 2 {
+        unsafe { vm.cursor.push(child_ptr) };
+    }
+
+    vm.ip += 1;
+    Ok(())
+}
+#[tailcall]
+pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
+    debug_log!("{:?}", vm);
+    match vm.executable.code[vm.ip] {
+        Instruction::Bool => {
+            boolean(vm, buf)?;
+            exec(vm, buf)
+        }
+        Instruction::UInt { size } => {
+            if size == 16 {
+                long(vm, buf, false)?
+            } else {
+                integer(vm, buf, size, false)?
+            };
+            exec(vm, buf)
+        }
+        Instruction::Int { size } => {
+            if size == 16 {
+                long(vm, buf, true)?
+            } else {
+                integer(vm, buf, size, true)?
+            };
+            exec(vm, buf)
+        }
+        Instruction::Float { size } => {
+            if size == 16 {
+                float128(vm, buf)?
+            } else {
+                float(vm, buf, size)?
+            };
+            exec(vm, buf)
+        }
+        Instruction::VarUInt => {
+            varuint32(vm, buf)?;
+            exec(vm, buf)
+        }
+        Instruction::VarInt => {
+            varint32(vm, buf)?;
+            exec(vm, buf)
+        }
+        Instruction::Bytes => {
+            bytes(vm, buf)?;
+            exec(vm, buf)
+        }
+        Instruction::BytesRaw { size } => {
+            bytes_raw(vm, buf, size)?;
+            exec(vm, buf)
+        }
+        Instruction::String => {
+            string(vm, buf)?;
+            exec(vm, buf)
+        }
+
+        Instruction::Optional => {
+            optional(vm, buf)?;
+            exec(vm, buf)
+        }
+        Instruction::Extension => {
+            extension(vm)?;
+            exec(vm, buf)
+        }
+
+        Instruction::PushCND => {
+            pushcnd(vm, buf)?;
+            exec(vm, buf)
+        }
+        Instruction::PopCursor => {
+            popcursor!(vm)?;
+            exec(vm, buf)
+        }
+
+        Instruction::Jmp { ptr } => {
+            jmp!(vm, ptr)?;
+            exec(vm, buf)
+        }
+        Instruction::JmpRet { ptr } => {
+            jmpret!(vm, ptr);
+            exec(vm, buf)
+        }
+        Instruction::JmpArrayCND(ptr) => {
+            jmpacnd(vm, ptr)?;
+            exec(vm, buf)
+        }
+        Instruction::JmpVariant(v, p) => {
+            jmpscnd!(vm, v, p)?;
+            exec(vm, buf)
+        }
+
+        Instruction::Section(ctype, _) => {
+            section(vm, buf, ctype)?;
+            exec(vm, buf)
+        }
+        Instruction::Field(name) => {
+            field!(vm, name);
+            exec(vm, buf)
+        }
+
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())
             } else {
-                exec(vm, io, buffer)
+                exec(vm, buf)
             }
         }
-        #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
-        Instruction::Section(ctype, id) => { section!(vm, ctype, id); exec(vm, io, buffer) },
-        Instruction::Field(name) => { field!(vm, name); exec(vm, io, buffer) },
     }
 }

@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
-use std::mem::discriminant;
 use bimap::BiHashMap;
 use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef};
-use crate::debug_log;
+use crate::{debug_log, get_str_or_unknown};
 use crate::isa::Instruction;
 use crate::compiler_error;
 use crate::utils::TypeCompileError;
@@ -46,36 +45,53 @@ impl Debug for Executable {
 }
 
 impl Executable {
-    pub fn pretty_string(&self) -> String {
-        fn get_str_or_unknown(ex: &Executable, id: usize) -> &str {
-            match ex.str_map.get_by_left(&id) {
-                Some(s) => s,
-                None => "unknown target",
-            }
-        }
 
-        let mut s = String::new();
-        let mut jmp_table_ended = false;
-        for i in 0..self.code.len() {
-            let op = &self.code[i];
-            jmp_table_ended |= discriminant(op) != discriminant(&Instruction::Jmp {ptr: 0});
-            let msg = if !jmp_table_ended {
-                get_str_or_unknown(self, i)
-            } else {
-                match op {
-                    Instruction::Section(_, id) => {
-                        get_str_or_unknown(self, *id)
-                    }
-                    Instruction::Field(id) => {
-                        get_str_or_unknown(self, *id)
-                    }
-                    _ => ""
-                }
-            };
-            s += format!("\n\t{i}: {op:?}").as_str();
-            if !msg.is_empty() {
-                s += format!("  # {msg}").as_str();
+    fn simple_jmp_str(&self, ptr: usize) -> String {
+        let op = &self.code[ptr];
+        match op {
+            Instruction::Section(ctype, id) => {
+                let type_str = match ctype {
+                    1 => "emum",
+                    2 => "struct",
+                    _ => unreachable!()
+                };
+                let sec_str = get_str_or_unknown!(self.str_map, id);
+                format!("{} {}", type_str, sec_str)
             }
+            Instruction::JmpRet { ptr } => self.simple_jmp_str(*ptr),
+            Instruction::JmpVariant(_, ptr) => self.simple_jmp_str(*ptr),
+            _ => format!("{:?}", op)
+        }
+    }
+    pub fn pretty_op_string(&self, i: usize) -> String {
+        let op = &self.code[i];
+        match op {
+            Instruction::Section(ctype, id) => {
+                let type_str = match ctype {
+                    1 => "emum(1)",
+                    2 => "struct(2)",
+                    _ => unreachable!()
+                };
+                let sec_str = get_str_or_unknown!(self.str_map, id);
+                format!("Section({}, {})", type_str, sec_str)
+            }
+            Instruction::Field(id) => format!("Field({})", get_str_or_unknown!(self.str_map, id)),
+            Instruction::Jmp { ptr } => format!("{:?} -> {}", op, self.simple_jmp_str(*ptr)),
+            Instruction::JmpRet { ptr } => {
+                format!("{:?} -> {}", op, self.simple_jmp_str(*ptr))
+            }
+            Instruction::JmpVariant(_, ptr) => {
+                format!("{:?} -> {}", op, self.simple_jmp_str(*ptr))
+            }
+            _ => format!("{:?}", op),
+        }
+    }
+
+    pub fn pretty_string(&self) -> String {
+        let mut s = String::new();
+        for i in 0..self.code.len() {
+            let op_str = self.pretty_op_string(i);
+            s += format!("\n\t{i}: {op_str}").as_str();
         }
 
         s
@@ -107,26 +123,34 @@ fn assemble_sections<
 
         let mut ptr = start_ptr;
         let mut found_exit = false;
-        while ptr < executable.len() || found_exit {
+        while ptr < executable.len() {
             match executable[ptr].clone() {
                 Instruction::Exit => {
                     found_exit = true;
-                    break;
                 },
                 Instruction::Jmp { ptr: jptr } => {
                     executable[ptr] = Instruction::Jmp {
                         ptr: start_ptr + jptr
                     };
                 },
-                Instruction::JmpStructCND(cnd, jptr) => {
-                    executable[ptr] = Instruction::JmpStructCND(cnd, ptr + jptr);
+                Instruction::JmpVariant(cnd, jptr) => {
+                    executable[ptr] = Instruction::JmpVariant(cnd, ptr + jptr);
                 }
                 Instruction::JmpArrayCND(_) => {
                     executable[ptr] = Instruction::JmpArrayCND(ptr - 1);
                 }
                 Instruction::Field(rel_str_id) => {
-                    let field_name = sec_program.strings.get(rel_str_id)
-                        .ok_or(compiler_error!("Couldn't find str of field id: {}", &rel_str_id))?;
+                    let src_strings = &sec_program.strings;
+                    let field_name = match sec_program.strings.get(rel_str_id) {
+                        Some(name) => Ok(name),
+                        None => Err(compiler_error!(
+                            "Couldn't find str of rel id {} in strings: {:#?}\nProgram code: {:#?}\nAt location: {ptr}\n{}",
+                            &rel_str_id,
+                            src_strings,
+                            sec_program.code,
+                            Executable { code: executable.clone(), str_map: src_ns.strings.clone() }.pretty_string()
+                        ))
+                    }?;
 
                     let str_id = src_ns.strings.get_by_right(field_name.as_str())
                         .ok_or(compiler_error!("Couldn't find absolute id of field str: {}", field_name))?
@@ -143,7 +167,11 @@ fn assemble_sections<
                 }
                 _ => ()
             }
-            ptr += 1;
+            if found_exit {
+                break;
+            } else {
+                ptr += 1;
+            }
         }
         if !found_exit {
             return Err(compiler_error!("Ran out of code while looking for exit of section: {}", sec_name));
@@ -161,7 +189,7 @@ pub fn assemble<
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
 ) -> Result<Executable, TypeCompileError> {
-    let mut code = Vec::new();
+    let mut code = vec![Instruction::Jmp { ptr: 1 }];
 
     // namespace .into_iter() is guaranteed to be in order of pid
     for program in src_ns.into_iter() {
@@ -196,19 +224,20 @@ pub fn assemble<
     #[cfg(feature = "debug")]
     {
         // validate
-        for (jmp_i, op) in exec.code[0..src_ns.len()].iter().cloned().enumerate() {
+        for (jmp_i, op) in exec.code[1..src_ns.len()].iter().cloned().enumerate() {
             match op {
                 Instruction::Jmp { ptr } => {
+                    let jmp_i = jmp_i + 1;
 
                     let src_program = src_ns.get_program(&jmp_i)
                         .ok_or(compiler_error!("Couldn't find source program: {}", jmp_i))?;
 
                     let mut i = ptr;
-                    while exec.code[i].clone() != Instruction::Exit {
+                    while !exec.code[i].cmp_type(&Instruction::Exit) {
                         let rel_i = i - ptr;
                         let asm_op = &exec.code[i];
                         let src_op = &src_program.code[rel_i];
-                        if !Instruction::validate_asm(src_op, asm_op) {
+                        if !src_op.cmp_type(asm_op) {
                             debug_log!("{} different at {}: {:?} -> {:?}", jmp_i, i, src_op, asm_op);
                             debug_log!("Source:\n{:#?}", src_program);
                             return Err(compiler_error!("Validation falied!"));

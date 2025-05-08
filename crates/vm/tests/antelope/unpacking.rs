@@ -12,20 +12,14 @@ use antelope::chain::abi::ShipABI;
 use antelope::chain::key_type::{KeyType, KeyTypeTrait};
 use antelope::chain::signature::Signature;
 use antelope::util::hex_to_bytes;
-use packvm::{
-    PackVM,
-    Value,
-    Instruction,
-    compiler::{
-        compile_type,
-        Program,
-        SourceCode,
-        ProgramNamespace,
-        antelope::AntelopeSourceCode,
-    },
-    compile_source,
-    assemble
-};
+use packvm::{PackVM, Value, Instruction, compiler::{
+    compile_type,
+    Program,
+    SourceCode,
+    ProgramNamespace,
+    antelope::AntelopeSourceCode,
+}, compile_source, assemble, run_unpack, run_pack};
+use packvm::isa::diff_values;
 use packvm::utils::numbers::{Float, Integer, Long};
 use packvm_macros::{VMStruct, VMEnum};
 
@@ -43,8 +37,8 @@ macro_rules! unpack_and_assert {
         ns.set_program(0, program);
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let decoded = vm.run_unpack(0, $bytes).expect("Pack failed");
-        assert_eq!(*decoded, $expected);
+        let decoded = run_unpack!(vm, 0, $bytes);
+        assert_eq!(decoded, $expected);
     }};
 }
 
@@ -246,8 +240,15 @@ fn test_unpack_struct() {
     let pid = src.program_id_for("test_struct").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let decoded = vm.run_unpack(pid, enc.get_bytes()).expect("Unpack failed");
-    assert_eq!(*decoded, expected);
+    let decoded = run_unpack!(vm, pid, enc.get_bytes());
+
+    if let Some(diffs) = diff_values(&decoded, &expected) {
+        println!("Expected: {:#?}", expected);
+        println!("Actual:   {:#?}", decoded);
+        println!("{:?}", diffs);
+    }
+
+    assert_eq!(decoded, expected);
 }
 
 const STDABI: &str = include_str!("std_abi.json");
@@ -264,7 +265,7 @@ fn test_unpack_result() {
     let pid = src.program_id_for("result").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let _decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
+    run_unpack!(vm, pid, encoded.as_slice());
 }
 
 #[test]
@@ -283,7 +284,7 @@ fn test_unpack_signature() {
     let pid = src.program_id_for("test_sig").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed");
+    let decoded = run_unpack!(vm, pid, encoded.as_slice());
     let dec_sig: Signature = if let Value::Struct(map) = decoded {
         let sig_field = map.get("sig").expect("failed to get sig field");
         if let Value::Bytes(raw_sig) = sig_field {
@@ -301,11 +302,59 @@ fn test_unpack_signature() {
 
     assert_eq!(sig, dec_sig);
 }
+
+const SIGBLOCKABI: &str = include_str!("signed_block_abi.json");
+
 #[test]
 fn test_unpack_signed_block() {
+    /*
+   {
+    "previous": "00000016da8c9c17de0607fb22bbcccdfc2f95b9c85461d7ccde1fc2c097410e",
+    "new_producers": null,
+    "header_extensions": [],
+    "timestamp": 1599457177,
+    "schedule_version": 0,
+    "action_mroot": "439dd15b0ea5bf1a1a399e9f3423ad1e6041810cde302e40931adfccded25013",
+    "producer": 6138663577826885632,
+    "producer_signature": "001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b",
+    "block_extensions": [],
+    "transaction_mroot": "fec74205e7462bb45dba6e21443ceb7ccd0c68dd9e6dcafddcb6c18b5c0f7d44",
+    "transactions": [
+        {
+            "cpu_usage_us": 1103,
+            "net_usage_words": 42,
+            "status": 0,
+            "trx": {
+                "packed_context_free_data": "",
+                "signatures": [
+                    "001f1678ccbb248596e3aecb7c37fa5569a37db46d7f09563e1231aaa9bed40fac730c2a2eecd58434cb683dbcdd2f854ab4cc854e874f9f8a4a3695971f66e7d6fc"
+                ],
+                "packed_trx": "d02a18681500f507a3a200ff0000030000000000ea305500409e9a2264b89a010000000000ea305500000000a8ed3232660000000000ea305550352ab4a9d177570100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000000000000ea305500b0cafe4873bd3e010000000000ea305500000000a8ed3232140000000000ea305550352ab4a9d17757809698000000000000ea305500003f2a1ba6a24a010000000000ea305500000000a8ed3232310000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000a08601000000000004544c4f530000000100",
+                "type": 1,
+                "compression": 0
+            }
+        },
+        {
+            "trx": {
+                "compression": 0,
+                "packed_trx": "d02a18681500f507a3a200ff00000100a6823403ea3055000000572d3ccdcd010000000000ea305500000000a8ed3232210000000000ea305550352ab4a9d17757a08601000000000004544c4f530000000000",
+                "type": 1,
+                "packed_context_free_data": "",
+                "signatures": [
+                    "001f71e1c8ec416f658f0a59d48e435ce9f539a72f980cd922407315277594e6c70f071a86ad33138b3dd37fdfc38434b3254c0dba17625f239de6c7ac7a7e7fb03e"
+                ]
+            },
+            "status": 0,
+            "cpu_usage_us": 129,
+            "net_usage_words": 16
+        }
+    ],
+    "confirmed": 0
+}
+     */
     let encoded = hex_to_bytes("99c7555f0000000000ea3055000000000016da8c9c17de0607fb22bbcccdfc2f95b9c85461d7ccde1fc2c097410efec74205e7462bb45dba6e21443ceb7ccd0c68dd9e6dcafddcb6c18b5c0f7d44439dd15b0ea5bf1a1a399e9f3423ad1e6041810cde302e40931adfccded25013000000000000001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b02004f0400002a0101001f1678ccbb248596e3aecb7c37fa5569a37db46d7f09563e1231aaa9bed40fac730c2a2eecd58434cb683dbcdd2f854ab4cc854e874f9f8a4a3695971f66e7d6fc0000a102d02a18681500f507a3a200ff0000030000000000ea305500409e9a2264b89a010000000000ea305500000000a8ed3232660000000000ea305550352ab4a9d177570100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000000000000ea305500b0cafe4873bd3e010000000000ea305500000000a8ed3232140000000000ea305550352ab4a9d17757809698000000000000ea305500003f2a1ba6a24a010000000000ea305500000000a8ed3232310000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000a08601000000000004544c4f5300000001000081000000100101001f71e1c8ec416f658f0a59d48e435ce9f539a72f980cd922407315277594e6c70f071a86ad33138b3dd37fdfc38434b3254c0dba17625f239de6c7ac7a7e7fb03e000053d02a18681500f507a3a200ff00000100a6823403ea3055000000572d3ccdcd010000000000ea305500000000a8ed3232210000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000000000");
 
-    let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
+    let abi: ShipABI = from_str(SIGBLOCKABI).expect("failed to parse ABI JSON");
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
     let ns = compile_source!(src);
     let code = assemble!(&ns);
@@ -313,8 +362,11 @@ fn test_unpack_signed_block() {
     let pid = src.program_id_for("signed_block").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let mut decoded = vm.run_unpack(pid, encoded.as_slice()).expect("Unpack failed").clone();
-    let re_encoded = vm.run_pack(pid, &mut decoded).expect("Pack failed");
+    let decoded = run_unpack!(vm, pid, encoded.as_slice()).clone();
+    let re_encoded = run_pack!(vm, pid, &decoded);
 
     assert_eq!(re_encoded, encoded);
+
+    let re_decoded = run_unpack!(vm, pid, re_encoded.as_slice());
+    assert_eq!(re_decoded, decoded);
 }

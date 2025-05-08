@@ -45,15 +45,28 @@ void abi_serializer::configure_built_in_types() {
 Any other type should be able to be represented by a sequence of these types
 
  */
+use crate::utils::numbers::{Float, Integer, Long};
+use crate::utils::varint::{VarInt32, VarUInt32};
 use std::cmp::PartialEq;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt;
 use std::fmt::Debug;
 use std::mem::discriminant;
-use crate::utils::numbers::{Float, Integer, Long};
-use crate::utils::varint::{VarInt32, VarUInt32};
 
-#[derive(Debug, Clone, PartialEq)]
+/// Helper that prints a byte slice as `0x…` hex.
+struct HexSlice<'a>(&'a [u8]);
+
+impl<'a> Debug for HexSlice<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("0x")?;
+        for byte in self.0 {
+            write!(f, "{:02x}", byte)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, PartialEq)]
 pub enum Value {
     None,
     Bool(bool),
@@ -61,11 +74,9 @@ pub enum Value {
     Int(Integer),
     Long(Long),
 
-    // var-len encoded integers
     VarUInt32(u32),
     VarInt32(i32),
 
-    // floats
     Float(Float),
     Float128([u8; 16]),
 
@@ -76,6 +87,24 @@ pub enum Value {
     Struct(HashMap<String, Value>),
 }
 
+impl Debug for Value {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Value::None => f.write_str("None"),
+            Value::Bool(b) => f.write_str(b.to_string().as_str()),
+            Value::Int(i) => f.write_str(i.to_string().as_str()),
+            Value::Long(l) => f.write_str(l.to_string().as_str()),
+            Value::VarUInt32(v) => f.debug_tuple("VarUInt32").field(v).finish(),
+            Value::VarInt32(v) => f.debug_tuple("VarInt32").field(v).finish(),
+            Value::Float(fl) => f.write_str(fl.to_string().as_str()),
+            Value::Float128(arr) => f.debug_tuple("Float128").field(&HexSlice(arr)).finish(),
+            Value::Bytes(bytes) => f.debug_tuple("Bytes").field(&HexSlice(bytes)).finish(),
+            Value::String(s) => f.write_str(format!("\"{s}\"").as_str()),
+            Value::Array(v) => f.debug_list().entries(v).finish(),
+            Value::Struct(map) => f.debug_map().entries(map).finish(),
+        }
+    }
+}
 
 // #[macro_export]
 // macro_rules! value_payload_size {
@@ -294,7 +323,10 @@ impl From<[u8; 16]> for Value {
     }
 }
 
-impl<T> From<Option<T>> for Value where T: Into<Value> {
+impl<T> From<Option<T>> for Value
+where
+    T: Into<Value>,
+{
     fn from(value: Option<T>) -> Self {
         if let Some(v) = value {
             v.into()
@@ -319,7 +351,7 @@ impl fmt::Display for Value {
             Value::Float(v) => write!(f, "{}", v),
             Value::Float128(bytes) => write!(f, "Float128({:02x?})", bytes),
 
-            Value::Bytes(vec) => write!(f, "Bytes({:02x?})", vec),
+            Value::Bytes(vec) => write!(f, "Bytes({:?})", HexSlice(vec)),
             Value::String(s) => write!(f, "String({})", s),
 
             Value::Array(vals) => write!(f, "Array({:?})", vals),
@@ -328,54 +360,143 @@ impl fmt::Display for Value {
     }
 }
 
+/// Recursively collect human‑readable differences between two `Value`s.
+/// An empty vector means the two values are identical.
+pub fn diff_values(left: &Value, right: &Value) -> Option<Vec<String>> {
+    fn walk(a: &Value, b: &Value, path: &str, out: &mut Vec<String>) {
+        // Fast path: identical => nothing to do
+        if a == b {
+            return;
+        }
+
+        match (a, b) {
+            (Value::Array(xs), Value::Array(ys)) => {
+                let max_len = xs.len().max(ys.len());
+                for i in 0..max_len {
+                    let p = format!("{path}[{i}]");
+                    match (xs.get(i), ys.get(i)) {
+                        (Some(vx), Some(vy)) => walk(vx, vy, &p, out),
+                        (Some(_), None) => out.push(format!("{p}: only on left")),
+                        (None, Some(_)) => out.push(format!("{p}: only on right")),
+                        _ => {}
+                    }
+                }
+            }
+
+            (Value::Struct(xs), Value::Struct(ys)) => {
+                let keys: BTreeSet<_> = xs.keys().chain(ys.keys()).collect();
+                for key in keys {
+                    let p = if path.is_empty() {
+                        format!(".{key}")
+                    } else {
+                        format!("{path}.{key}")
+                    };
+                    match (xs.get(key), ys.get(key)) {
+                        (Some(vx), Some(vy)) => walk(vx, vy, &p, out),
+                        (Some(_), None) => out.push(format!("{p}: only on left")),
+                        (None, Some(_)) => out.push(format!("{p}: only on right")),
+                        _ => {}
+                    }
+                }
+            }
+
+            // scalar variants with same discriminant but different content
+            (Value::Bool(x), Value::Bool(y)) => out.push(format!("{path}: Bool {x} ≠ {y}")),
+            (Value::Int(x), Value::Int(y)) => out.push(format!("{path}: Int {x:?} ≠ {y:?}")),
+            (Value::Long(x), Value::Long(y)) => out.push(format!("{path}: Long {x:?} ≠ {y:?}")),
+            (Value::VarUInt32(x), Value::VarUInt32(y)) => {
+                out.push(format!("{path}: VarUInt32 {x} ≠ {y}"))
+            }
+            (Value::VarInt32(x), Value::VarInt32(y)) => {
+                out.push(format!("{path}: VarInt32 {x} ≠ {y}"))
+            }
+            (Value::Float(x), Value::Float(y)) => out.push(format!("{path}: Float {x:?} ≠ {y:?}")),
+            (Value::Float128(_), Value::Float128(_)) => {
+                out.push(format!("{path}: Float128 differs"))
+            }
+            (Value::Bytes(x), Value::Bytes(y)) => {
+                out.push(format!("{path}: Bytes len {} ≠ {}", x.len(), y.len()))
+            }
+            (Value::String(x), Value::String(y)) => {
+                out.push(format!("{path}: String \"{x}\" ≠ \"{y}\""))
+            }
+
+            // any other variant mismatch
+            (l, r) => out.push(format!(
+                "{path}: variant mismatch (left={:?}, right={:?})",
+                discriminant(l),
+                discriminant(r)
+            )),
+        }
+    }
+
+    let mut diffs = Vec::new();
+    walk(left, right, "", &mut diffs);
+    if diffs.is_empty() {
+        return None;
+    }
+    Some(diffs)
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Instruction {
     // IO manipulation, what to pack/unpack next
     Bool,
-    UInt{ size: u8 },
-    Int{ size: u8 },
+    UInt {
+        size: u8,
+    },
+    Int {
+        size: u8,
+    },
     VarUInt,
     VarInt,
-    Float{ size: u8 },
-    Bytes,  // bytes with LEB128 encoded size first
-    BytesRaw{ size: usize },  // raw bytes, if param is > 0 do size check on stack value
-    String,  // utf-8 string with LEB128 encoded len
+    Float {
+        size: u8,
+    },
+    Bytes, // bytes with LEB128 encoded size first
+    BytesRaw {
+        size: usize,
+    }, // raw bytes, if param is > 0 do size check on stack value
+    String, // utf-8 string with LEB128 encoded len
 
     Optional,  // next value is optional, encode a flag as a u8 before
-    Extension,  // extensions are like optionals but they dont encode a flag in a u8
+    Extension, // extensions are like optionals but they dont encode a flag in a u8
 
     // structure marks
-
-    Section(  // indicates a new program section
-        u8,  // struct type: 1 = enum, 2 = struct
-        usize  // program id
+    Section(
+        // indicates a new program section
+        u8,    // struct type: 1 = enum, 2 = struct
+        usize, // program id
     ),
 
-    Field(usize),  // indicate field name string id for next value
+    Field(usize), // indicate field name string id for next value
 
     // push condition from io into condition stack
-    // param is cnd type, 0 = array len, 1 = enum variant
-    PushCND(u8),
+    // used to indicate array len
+    PushCND,
 
-    // discard condition from stack
-    PopCND,
+    // maybe pop a node from the cursor stack
+    PopCursor,
 
     // jumps
-    Jmp { ptr: usize },  // absolute jmp
+    Jmp {
+        ptr: usize,
+    }, // absolute jmp
 
     // perform absolute jmp and return on next Exit instruction
-    JmpRet{ ptr: usize },
+    JmpRet {
+        ptr: usize,
+    },
 
+    // conditional jumps
 
-    // conditional jumps based on first value on condition stack
-
-    // jump to ptr if current condition == value
-    JmpStructCND(
-        u32,  // cnd value
-        usize  // location to jump to
+    // jump depending on et register
+    JmpVariant(
+        u32,   // et value
+        usize, // location to jump to
     ),
 
-    // jump to pointer if condition > 0
+    // jump to pointer if array cnd > 0
     JmpArrayCND(usize),
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
@@ -383,42 +504,52 @@ pub enum Instruction {
 }
 
 impl Instruction {
-    pub fn validate_asm(src: &Instruction, dst: &Instruction) -> bool {
-        discriminant(src) == discriminant(dst)
+    pub fn cmp_type(&self, other: &Instruction) -> bool {
+        discriminant(self) == discriminant(other)
     }
 }
 
 pub const STD_TYPES: [&str; 39] = [
-    "bool", "boolean",
-
-    "uint8", "u8",
-    "uint16", "u16",
-    "uint32", "u32",
-    "uint64", "u64",
-    "uint128", "u128",
-
-    "int8", "i8",
-    "int16", "i16",
-    "int32", "i32",
-    "int64", "i64",
-    "int128", "i128",
-
-    "uleb128", "varuint32",
-    "sleb128", "varint32",
-
-    "float32", "f32",
-    "float64", "f64",
-    "float128", "f128",
-
-    "bytes", "str", "string",
-
+    "bool",
+    "boolean",
+    "uint8",
+    "u8",
+    "uint16",
+    "u16",
+    "uint32",
+    "u32",
+    "uint64",
+    "u64",
+    "uint128",
+    "u128",
+    "int8",
+    "i8",
+    "int16",
+    "i16",
+    "int32",
+    "i32",
+    "int64",
+    "i64",
+    "int128",
+    "i128",
+    "uleb128",
+    "varuint32",
+    "sleb128",
+    "varint32",
+    "float32",
+    "f32",
+    "float64",
+    "f64",
+    "float128",
+    "f128",
+    "bytes",
+    "str",
+    "string",
     "sum160",
     "sum256",
     "sum512",
-
     "raw",
 ];
-
 
 #[macro_export]
 macro_rules! is_std_type {
@@ -439,47 +570,47 @@ macro_rules! instruction_for {
         match $ty {
             "bool" | "boolean" => Some(Instruction::Bool),
 
-            "uint8" | "u8" => Some(Instruction::UInt{ size: 1 }),
-            "uint16" | "u16" => Some(Instruction::UInt{ size: 2 }),
-            "uint32" | "u32" => Some(Instruction::UInt{ size: 4 }),
-            "uint64" | "u64" => Some(Instruction::UInt{ size: 8 }),
-            "uint128" | "u128" => Some(Instruction::UInt{ size: 16 }),
+            "uint8" | "u8" => Some(Instruction::UInt { size: 1 }),
+            "uint16" | "u16" => Some(Instruction::UInt { size: 2 }),
+            "uint32" | "u32" => Some(Instruction::UInt { size: 4 }),
+            "uint64" | "u64" => Some(Instruction::UInt { size: 8 }),
+            "uint128" | "u128" => Some(Instruction::UInt { size: 16 }),
 
-            "int8" | "i8" => Some(Instruction::Int{ size: 1 }),
-            "int16" | "i16" => Some(Instruction::Int{ size: 2 }),
-            "int32" | "i32" => Some(Instruction::Int{ size: 4 }),
-            "int64" | "i64" => Some(Instruction::Int{ size: 8 }),
-            "int128" | "i128" => Some(Instruction::Int{ size: 16 }),
+            "int8" | "i8" => Some(Instruction::Int { size: 1 }),
+            "int16" | "i16" => Some(Instruction::Int { size: 2 }),
+            "int32" | "i32" => Some(Instruction::Int { size: 4 }),
+            "int64" | "i64" => Some(Instruction::Int { size: 8 }),
+            "int128" | "i128" => Some(Instruction::Int { size: 16 }),
 
             "uleb128" | "varuint32" => Some(Instruction::VarUInt),
             "sleb128" | "varint32" => Some(Instruction::VarInt),
 
-            "float32" | "f32" => Some(Instruction::Float{ size: 4 }),
-            "float64" | "f64" => Some(Instruction::Float{ size: 8 }),
-            "float128" | "f128" => Some(Instruction::Float{ size: 16 }),
+            "float32" | "f32" => Some(Instruction::Float { size: 4 }),
+            "float64" | "f64" => Some(Instruction::Float { size: 8 }),
+            "float128" | "f128" => Some(Instruction::Float { size: 16 }),
 
             "bytes" => Some(Instruction::Bytes),
             "str" | "string" => Some(Instruction::String),
 
-            "sum160" => Some(Instruction::BytesRaw{ size: 20 }),
-            "sum256" => Some(Instruction::BytesRaw{ size: 32 }),
-            "sum512" => Some(Instruction::BytesRaw{ size: 64 }),
+            "sum160" => Some(Instruction::BytesRaw { size: 20 }),
+            "sum256" => Some(Instruction::BytesRaw { size: 32 }),
+            "sum512" => Some(Instruction::BytesRaw { size: 64 }),
 
-            "raw" => Some(Instruction::BytesRaw{ size: 0 }),
+            "raw" => Some(Instruction::BytesRaw { size: 0 }),
 
             _ => {
                 if $ty.starts_with("raw(") {
-                    let size: usize = $ty
-                        .split("(").collect::<Vec<&str>>()[1]
-                        .split(")").collect::<Vec<&str>>()[0]
+                    let size: usize = $ty.split("(").collect::<Vec<&str>>()[1]
+                        .split(")")
+                        .collect::<Vec<&str>>()[0]
                         .parse()
                         .unwrap_or_default();
 
-                    Some(Instruction::BytesRaw{ size })
+                    Some(Instruction::BytesRaw { size })
                 } else {
                     None
                 }
-            },
+            }
         }
     };
 }
