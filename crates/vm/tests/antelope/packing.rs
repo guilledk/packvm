@@ -10,12 +10,11 @@ use antelope::chain::name::Name;
 use antelope::chain::public_key::PublicKey;
 use packvm::{PackVM, Value, Instruction, compiler::{
     compile_type,
-    Program,
     SourceCode,
     ProgramNamespace,
     antelope::AntelopeSourceCode,
 }, compile_source, assemble, run_pack};
-use packvm::utils::numbers::{U48, Float, Integer, Long};
+use packvm::utils::numbers::{Float, Integer, Long};
 use packvm_macros::{VMStruct, VMEnum};
 
 const TESTABI: &str = include_str!("test_abi.json");
@@ -24,15 +23,26 @@ const TESTABI: &str = include_str!("test_abi.json");
 /// and assert that the resulting stack equals `$expected`.
 macro_rules! pack_and_assert {
     ($type_name:expr, $value:expr, $expected:expr $(,)?) => {{
+        // create dummy namespace
         let src = AntelopeSourceCode::default();
-        let mut program = Program::default();
-        compile_type(&src, $type_name, &mut program).expect("failed to compile");
-        program.code.push(Instruction::Exit);
         let mut ns = ProgramNamespace::from_source(&src);
-        ns.set_program(U48(1), program);
+
+        // create dummy program
+        let mut program = Default::default();
+
+        // do the equivalent of compile_program
+        compile_type(&src, $type_name, &mut program)
+            .unwrap_or_else(|e| panic!("{}", e.reason));
+        program.code.push(Instruction::Exit);
+
+        ns.set_program(program.clone());
+
+        // finally assemble and run
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let encoded = run_pack!(vm, U48(1), $value);
+        let encoded = run_pack!(vm, program.id, $value);
+
+        // compare result with expected
         assert_eq!(encoded, $expected);
     }};
 }
@@ -64,15 +74,15 @@ fn test_pack_ints() {
 
 #[test]
 fn test_pack_varuint32() {
-    pack_and_assert!("varuint32", &Value::VarUInt32(0x7Fu32), &[0x7F]);
-    pack_and_assert!("varuint32", &Value::VarUInt32(0x80u32), &[0x80, 0x01]);
+    pack_and_assert!("varuint32", &Value::Int(Integer::from(0x7Fu32)), &[0x7F]);
+    pack_and_assert!("varuint32", &Value::Int(Integer::from(0x80u32)), &[0x80, 0x01]);
 }
 
 #[test]
 fn test_pack_floats() {
     pack_and_assert!("float32", &Value::Float(Float::from(1.0f32)), &1.0f32.to_le_bytes());
     pack_and_assert!("float64", &Value::Float(Float::from(2.0f64)), &2.0f64.to_le_bytes());
-    pack_and_assert!("float128", &Value::Float128([1u8; 16]), &[1u8; 16]);
+    pack_and_assert!("float128", &Value::Bytes([1u8; 16].to_vec()), &[1u8; 16]);
 }
 
 #[test]

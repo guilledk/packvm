@@ -162,38 +162,23 @@ fn float(vm: &mut PackVM, buf: &mut Vec<u8>, size: u8) -> OpResult {
 }
 
 #[inline(always)]
-fn float128(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
-    let v = vmgetio_expect!(vm, Value::Float128(_), "Float128");
-    if let Value::Float128(arr) = v {
-        vmpack!(vm, buf, arr);
-    }
-    vmstep!(vm);
-    Ok(())
-}
-
-#[inline(always)]
-fn varuint32(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
-    let v = vmgetio_expect!(vm, Value::VarUInt32(_), "VarUInt32");
-    let n = if let Value::VarUInt32(n) = v {
-        *n
-    } else {
-        unreachable!()
+fn leb128(vm: &mut PackVM, buf: &mut Vec<u8>, signed: bool) -> OpResult {
+    let val = vmgetio_expect!(vm, Value::Int(_), "Int");
+    let n = match val {
+        Value::Int(n) => n,
+        _ => unreachable!(),
     };
-    let (raw, len) = VarUInt32(n).encode();
-    vmpack!(vm, buf, &raw[..len]);
-    vmstep!(vm);
-    Ok(())
-}
-
-#[inline(always)]
-fn varint32(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
-    let v = vmgetio_expect!(vm, Value::VarInt32(_), "VarInt32");
-    let n = if let Value::VarInt32(n) = v {
-        *n
+    let (raw, len) = if signed {
+        VarInt32(
+            n.as_i64()
+                .ok_or(packer_error!("Expected a signed int for sleb128"))? as i32
+        ).encode()
     } else {
-        unreachable!()
+        VarUInt32(
+            n.as_u64()
+                .ok_or(packer_error!("Expected a signed int for sleb128"))? as u32
+        ).encode()
     };
-    let (raw, len) = VarInt32(n).encode();
     vmpack!(vm, buf, &raw[..len]);
     vmstep!(vm);
     Ok(())
@@ -385,19 +370,11 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             exec(vm, buf)
         }
         Instruction::Float(size) => {
-            if size == 16 {
-                float128(vm, buf)?
-            } else {
-                float(vm, buf, size)?
-            };
+            float(vm, buf, size)?;
             exec(vm, buf)
         }
-        Instruction::VarUInt => {
-            varuint32(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::VarInt => {
-            varint32(vm, buf)?;
+        Instruction::Leb128(signed) => {
+            leb128(vm, buf, signed)?;
             exec(vm, buf)
         }
         Instruction::Bytes => {

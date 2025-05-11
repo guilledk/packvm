@@ -203,33 +203,18 @@ fn float(vm: &mut PackVM, buffer: &[u8], size: u8) -> Result<(), PackerError> {
 }
 
 #[inline(always)]
-fn varuint32(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
-    let (varint, val_size) =
-        VarUInt32::decode(&buffer[vm.bp..]).map_err(|e| packer_error!("{}", e))?;
-
-    vmsetio!(vm, Value::VarUInt32(varint.0));
+fn leb128(vm: &mut PackVM, buffer: &[u8], signed: bool) -> OpResult {
+    let (val, val_size) = if signed {
+        let (varint, val_size) =
+            VarInt32::decode(&buffer[vm.bp..]).map_err(|e| packer_error!("{}", e))?;
+        (Value::Int(Integer::from(varint.0)), val_size)
+    } else {
+        let (varint, val_size) =
+            VarUInt32::decode(&buffer[vm.bp..]).map_err(|e| packer_error!("{}", e))?;
+        (Value::Int(Integer::from(varint.0)), val_size)
+    };
+    vmsetio!(vm, val);
     vm.bp += val_size;
-    vmstep!(vm);
-    Ok(())
-}
-
-#[inline(always)]
-fn varint32(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
-    let (varint, val_size) =
-        VarInt32::decode(&buffer[vm.bp..]).map_err(|e| packer_error!("{}", e))?;
-    vmsetio!(vm, Value::VarInt32(varint.0));
-    vm.bp += val_size;
-    vmstep!(vm);
-    Ok(())
-}
-
-#[inline(always)]
-fn float128(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
-    let float_raw: [u8; 16] = vmunpack!(vm, buffer, 16)
-        .try_into()
-        .map_err(|e| packer_error!("{}", e))?;
-
-    vmsetio!(vm, Value::Float128(float_raw));
     vmstep!(vm);
     Ok(())
 }
@@ -382,25 +367,14 @@ pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
             exec(vm, buffer)
         }
 
-        Instruction::VarUInt => {
-            varuint32(vm, buffer)?;
-            exec(vm, buffer)
-        }
-        Instruction::VarInt => {
-            varint32(vm, buffer)?;
+        Instruction::Leb128(signed) => {
+            leb128(vm, buffer, signed)?;
             exec(vm, buffer)
         }
 
-        Instruction::Float(size) => match size {
-            4 | 8 => {
-                float(vm, buffer, size)?;
-                exec(vm, buffer)
-            }
-            16 => {
-                float128(vm, buffer)?;
-                exec(vm, buffer)
-            }
-            _ => unreachable!(),
+        Instruction::Float(size) => {
+            float(vm, buffer, size)?;
+            exec(vm, buffer)
         },
 
         Instruction::Bytes => {

@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use bimap::BiHashMap;
 use crate::{debug_log, instruction_for};
-use crate::isa::Instruction;
+use crate::isa::{Instruction, STD_TYPES};
 use crate::compiler_error;
 use crate::utils::{TypeCompileError};
 use crate::utils::numbers::U48;
@@ -94,6 +94,8 @@ pub trait StructDef<
     fn fields(&self) -> &[T];
 }
 
+pub const RESERVED_IDS: usize = 1 + STD_TYPES.len();
+
 pub trait SourceCode<
     Alias: TypeAlias,
     Type: TypeDef,
@@ -117,21 +119,18 @@ pub trait SourceCode<
             None => name.to_string(),
         };
 
-        // add one if found cause id 0 is reserved
-
         if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
-            return Some((id + 1).into());
+            return Some((id + RESERVED_IDS).into());
         }
 
         if let Some(id) = self.enums().iter().position(|s| s.name() == name) {
-            return Some((id + self.structs().len() + 1).into());
+            return Some((id + self.structs().len() + RESERVED_IDS).into());
         }
 
         None
     }
 }
 
-#[derive(Default)]
 pub struct Program {
     pub id: U48,
     pub name: String,
@@ -139,36 +138,50 @@ pub struct Program {
     pub code: Vec<Instruction>,
     pub deps: HashSet<U48>,
     pub strings: Vec<String>,
-
-    pub base_size: usize,
 }
 
-#[derive(Debug, Clone)]
+impl Program {
+    pub fn index(&self) -> usize {
+        usize::from(self.id) - RESERVED_IDS
+    }
+}
+
+impl Default for Program {
+    fn default() -> Self {
+       Self {
+           id: U48::from(RESERVED_IDS),
+           name: Default::default(),
+           code: Default::default(),
+           deps: Default::default(),
+           strings: Default::default(),
+       }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ProgramNamespace<
-    'a,
     A: TypeAlias,
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
 > {
-    src: &'a Source,
+    src: Source,
     ns: HashMap<U48, Program>,
     strings: BiHashMap<U48, String>,
     _marker: PhantomData<(A, T, E, S)>,
 }
 
 impl<
-    'a,
     A: TypeAlias,
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug
-> ProgramNamespace<'a, A, T, E, S, Source> {
-    pub fn from_source(src: &'a Source) -> Self {
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
+> ProgramNamespace<A, T, E, S, Source> {
+    pub fn from_source(src: &Source) -> Self {
         Self {
-            src,
+            src: src.clone(),
             ns: HashMap::default(),
             strings: BiHashMap::default(),
             _marker: PhantomData::default(),
@@ -197,13 +210,12 @@ impl<
                 code: Vec::new(),
                 deps: HashSet::new(),
                 strings: Vec::new(),
-                base_size: 0,
             }
         }))
     }
 
-    pub fn set_program(&mut self, id: U48, program: Program) -> Option<Program> {
-        self.ns.insert(id, program)
+    pub fn set_program(&mut self, program: Program) -> Option<Program> {
+        self.ns.insert(program.id, program)
     }
 
     pub fn len(&self) -> usize {
@@ -212,8 +224,14 @@ impl<
 
     pub fn calculate_string_map(&mut self) -> () {
         self.strings.clear();
-        self.strings.insert(U48(0), "RESERVED".to_string());
-        let mut field_id: U48 = (self.len() + 1).into();
+
+        // insert reserved strings
+        self.strings.insert(U48(0), "__reserved".to_string());
+        for i in 1..RESERVED_IDS {
+            self.strings.insert(U48::from(i), format!("__reserved_{}", STD_TYPES[i-1]));
+        }
+
+        let mut field_id = U48::from(self.len() + RESERVED_IDS).into();
         for program in self.into_iter().cloned().collect::<Vec<Program>>() {
             self.strings.insert(program.id, program.name.clone());
             for string in &program.strings {
@@ -245,8 +263,8 @@ impl<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug
-> IntoIterator for &'a ProgramNamespace<'a, A, T, E, S, Source> {
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
+> IntoIterator for &'a ProgramNamespace<A, T, E, S, Source> {
     type Item = &'a Program;
     type IntoIter = std::vec::IntoIter<&'a Program>;
 
@@ -263,8 +281,8 @@ impl Debug for Program {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "Program[{}] \"{}\"\nbase size: {}\ndeps: {:?}\n",
-            self.id, self.name, self.base_size, self.deps
+            "Program[{}] \"{}\"\ndeps: {:?}\n",
+            self.id, self.name, self.deps
         )?;
         writeln!(f, "Code: [")?;
         for (idx, op) in self.code.iter().enumerate() {
@@ -282,7 +300,6 @@ impl Clone for Program {
             code: self.code.clone(),
             deps: self.deps.clone(),
             strings: self.strings.clone(),
-            base_size: self.base_size,
         }
     }
 }
@@ -564,7 +581,7 @@ pub fn compile_program<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug,
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
 >(
     src: &Source,
     program_name: String,
@@ -628,7 +645,7 @@ pub fn compile_source<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug,
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
 >(
     src: &Source,
 ) -> Result<ProgramNamespace<A, T, E, S, Source>, TypeCompileError> {

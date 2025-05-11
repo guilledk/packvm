@@ -1,52 +1,4 @@
-// https://github.com/AntelopeIO/leap/blob/92b6fec5e949660bae78e90ebf555fe71ab06940/libraries/chain/abi_serializer.cpp#L89
-
-/*
-void abi_serializer::configure_built_in_types() {
-    built_in_types.emplace("bool",                      pack_unpack<uint8_t>());
-    built_in_types.emplace("int8",                      pack_unpack<int8_t>());
-    built_in_types.emplace("uint8",                     pack_unpack<uint8_t>());
-    built_in_types.emplace("int16",                     pack_unpack<int16_t>());
-    built_in_types.emplace("uint16",                    pack_unpack<uint16_t>());
-    built_in_types.emplace("int32",                     pack_unpack<int32_t>());
-    built_in_types.emplace("uint32",                    pack_unpack<uint32_t>());
-    built_in_types.emplace("int64",                     pack_unpack<int64_t>());
-    built_in_types.emplace("uint64",                    pack_unpack<uint64_t>());
-    built_in_types.emplace("int128",                    pack_unpack<int128_t>());
-    built_in_types.emplace("uint128",                   pack_unpack<uint128_t>());
-    built_in_types.emplace("varint32",                  pack_unpack<fc::signed_int>());
-    built_in_types.emplace("varuint32",                 pack_unpack<fc::unsigned_int>());
-
-    built_in_types.emplace("float32",                   pack_unpack<float>());
-    built_in_types.emplace("float64",                   pack_unpack<double>());
-    built_in_types.emplace("float128",                  pack_unpack<float128_t>());
-
-    built_in_types.emplace("time_point",                pack_unpack<fc::time_point>());
-    built_in_types.emplace("time_point_sec",            pack_unpack<fc::time_point_sec>());
-    built_in_types.emplace("block_timestamp_type",      pack_unpack<block_timestamp_type>());
-
-    built_in_types.emplace("name",                      pack_unpack<name>());
-
-    built_in_types.emplace("bytes",                     pack_unpack<bytes>());
-    built_in_types.emplace("string",                    pack_unpack<string>());
-
-    built_in_types.emplace("checksum160",               pack_unpack<checksum160_type>());
-    built_in_types.emplace("checksum256",               pack_unpack<checksum256_type>());
-    built_in_types.emplace("checksum512",               pack_unpack<checksum512_type>());
-
-    built_in_types.emplace("public_key",                pack_unpack_deadline<public_key_type>());
-    built_in_types.emplace("signature",                 pack_unpack_deadline<signature_type>());
-
-    built_in_types.emplace("symbol",                    pack_unpack<symbol>());
-    built_in_types.emplace("symbol_code",               pack_unpack<symbol_code>());
-    built_in_types.emplace("asset",                     pack_unpack<asset>());
-    built_in_types.emplace("extended_asset",            pack_unpack<extended_asset>());
-}
-
-Any other type should be able to be represented by a sequence of these types
-
- */
 use crate::utils::numbers::{Float, Integer, Long, U48};
-use crate::utils::varint::{VarInt32, VarUInt32};
 use std::cmp::PartialEq;
 use std::collections::{BTreeSet, HashMap};
 use std::fmt;
@@ -73,12 +25,7 @@ pub enum Value {
 
     Int(Integer),
     Long(Long),
-
-    VarUInt32(u32),
-    VarInt32(i32),
-
     Float(Float),
-    Float128([u8; 16]),
 
     Bytes(Vec<u8>),
     String(String),
@@ -94,10 +41,7 @@ impl Debug for Value {
             Value::Bool(b) => f.write_str(b.to_string().as_str()),
             Value::Int(i) => f.write_str(i.to_string().as_str()),
             Value::Long(l) => f.write_str(l.to_string().as_str()),
-            Value::VarUInt32(v) => f.debug_tuple("VarUInt32").field(v).finish(),
-            Value::VarInt32(v) => f.debug_tuple("VarInt32").field(v).finish(),
             Value::Float(fl) => f.write_str(fl.to_string().as_str()),
-            Value::Float128(arr) => f.debug_tuple("Float128").field(&HexSlice(arr)).finish(),
             Value::Bytes(bytes) => f.debug_tuple("Bytes").field(&HexSlice(bytes)).finish(),
             Value::String(s) => f.write_str(format!("\"{s}\"").as_str()),
             Value::Array(v) => f.debug_list().entries(v).finish(),
@@ -105,79 +49,6 @@ impl Debug for Value {
         }
     }
 }
-
-// #[macro_export]
-// macro_rules! value_payload_size {
-//     ($value:expr) => {
-//         match $value {
-//             Value::Bool(_) => 1,
-//
-//             Value::Uint8(_) => 1,
-//             Value::Uint16(_) => 2,
-//             Value::Uint32(_) => 4,
-//             Value::Uint64(_) => 8,
-//             Value::Uint128(_) => 16,
-//
-//             Value::Int8(_) => 1,
-//             Value::Int16(_) => 2,
-//             Value::Int32(_) => 4,
-//             Value::Int64(_) => 8,
-//             Value::Int128(_) => 16,
-//
-//             Value::VarUInt32(v) => {
-//                 if *v < 0x80 { 1 }
-//                 else if *v < 0x4000 { 2 }
-//                 else if *v < 0x200000 { 3 }
-//                 else if *v < 0x10000000 { 4 }
-//                 else { 5 }
-//             },
-//             Value::VarInt32(v) => {
-//                 let zigzag = ((*v << 1) ^ (*v >> 31)) as u32;
-//                 if zigzag < 0x80 { 1 }
-//                 else if zigzag < 0x4000 { 2 }
-//                 else if zigzag < 0x200000 { 3 }
-//                 else if zigzag < 0x10000000 { 4 }
-//                 else { 5 }
-//             },
-//
-//             Value::Float32(_) => 4,
-//             Value::Float64(_) => 8,
-//             Value::Float128(_) => 16,
-//
-//             Value::Bytes(ref v) => {
-//                 let len = v.len();
-//                 let len_prefix_size = if len < 0x80 { 1 }
-//                     else if len < 0x4000 { 2 }
-//                     else if len < 0x200000 { 3 }
-//                     else if len < 0x10000000 { 4 }
-//                     else { 5 };
-//                 len_prefix_size + len
-//             },
-//
-//             Value::Array(v) => {
-//                 let v = v.len() as u32;
-//                 if v < 0x80 { 1 }
-//                 else if v < 0x4000 { 2 }
-//                 else if v < 0x200000 { 3 }
-//                 else if v < 0x10000000 { 4 }
-//                 else { 5 }
-//             }
-//
-//             _ => 0
-//         }
-//     };
-// }
-
-// #[macro_export]
-// macro_rules! payload_size {
-//     ($values:expr) => {{
-//         let mut total_size = 0;
-//         for val in $values {
-//             total_size += crate::value_payload_size!(val);
-//         }
-//         total_size
-//     }};
-// }
 
 impl From<bool> for Value {
     fn from(value: bool) -> Self {
@@ -305,24 +176,6 @@ impl From<Vec<String>> for Value {
     }
 }
 
-impl From<VarUInt32> for Value {
-    fn from(value: VarUInt32) -> Self {
-        Value::VarUInt32(value.0)
-    }
-}
-
-impl From<VarInt32> for Value {
-    fn from(value: VarInt32) -> Self {
-        Value::VarInt32(value.0)
-    }
-}
-
-impl From<[u8; 16]> for Value {
-    fn from(value: [u8; 16]) -> Self {
-        Value::Float128(value)
-    }
-}
-
 impl<T> From<Option<T>> for Value
 where
     T: Into<Value>,
@@ -345,11 +198,7 @@ impl fmt::Display for Value {
             Value::Int(v) => write!(f, "{}", v),
             Value::Long(v) => write!(f, "{}", v),
 
-            Value::VarUInt32(v) => write!(f, "{}", v),
-            Value::VarInt32(v) => write!(f, "{}", v),
-
             Value::Float(v) => write!(f, "{}", v),
-            Value::Float128(bytes) => write!(f, "Float128({:02x?})", bytes),
 
             Value::Bytes(vec) => write!(f, "Bytes({:?})", HexSlice(vec)),
             Value::String(s) => write!(f, "String({})", s),
@@ -404,16 +253,7 @@ pub fn diff_values(left: &Value, right: &Value) -> Option<Vec<String>> {
             (Value::Bool(x), Value::Bool(y)) => out.push(format!("{path}: Bool {x} ≠ {y}")),
             (Value::Int(x), Value::Int(y)) => out.push(format!("{path}: Int {x:?} ≠ {y:?}")),
             (Value::Long(x), Value::Long(y)) => out.push(format!("{path}: Long {x:?} ≠ {y:?}")),
-            (Value::VarUInt32(x), Value::VarUInt32(y)) => {
-                out.push(format!("{path}: VarUInt32 {x} ≠ {y}"))
-            }
-            (Value::VarInt32(x), Value::VarInt32(y)) => {
-                out.push(format!("{path}: VarInt32 {x} ≠ {y}"))
-            }
             (Value::Float(x), Value::Float(y)) => out.push(format!("{path}: Float {x:?} ≠ {y:?}")),
-            (Value::Float128(_), Value::Float128(_)) => {
-                out.push(format!("{path}: Float128 differs"))
-            }
             (Value::Bytes(x), Value::Bytes(y)) => {
                 out.push(format!("{path}: Bytes len {} ≠ {}", x.len(), y.len()))
             }
@@ -444,8 +284,7 @@ pub enum Instruction {
     Bool,
     UInt(u8),
     Int(u8),
-    VarUInt,
-    VarInt,
+    Leb128(bool),
     Float(u8),
     Bytes, // bytes with LEB128 encoded size first
     BytesRaw (U48), // raw bytes, if param is > 0 do size check on stack value
@@ -497,45 +336,30 @@ impl Instruction {
     }
 }
 
-pub const STD_TYPES: [&str; 39] = [
+pub const STD_TYPES: [&str; 18] = [
     "bool",
-    "boolean",
-    "uint8",
+
     "u8",
-    "uint16",
     "u16",
-    "uint32",
     "u32",
-    "uint64",
     "u64",
-    "uint128",
     "u128",
-    "int8",
+
     "i8",
-    "int16",
     "i16",
-    "int32",
     "i32",
-    "int64",
     "i64",
-    "int128",
     "i128",
+
     "uleb128",
-    "varuint32",
     "sleb128",
-    "varint32",
-    "float32",
+
     "f32",
-    "float64",
     "f64",
-    "float128",
-    "f128",
+
     "bytes",
     "str",
-    "string",
-    "sum160",
-    "sum256",
-    "sum512",
+
     "raw",
 ];
 
@@ -556,33 +380,28 @@ macro_rules! is_std_type {
 macro_rules! instruction_for {
     ($ty:expr) => {
         match $ty {
-            "bool" | "boolean" => Some(Instruction::Bool),
+            "bool" => Some(Instruction::Bool),
 
-            "uint8" | "u8" => Some(Instruction::UInt(1)),
-            "uint16" | "u16" => Some(Instruction::UInt(2)),
-            "uint32" | "u32" => Some(Instruction::UInt(4)),
-            "uint64" | "u64" => Some(Instruction::UInt(8)),
-            "uint128" | "u128" => Some(Instruction::UInt(16)),
+            "u8" => Some(Instruction::UInt(1)),
+            "u16" => Some(Instruction::UInt(2)),
+            "u32" => Some(Instruction::UInt(4)),
+            "u64" => Some(Instruction::UInt(8)),
+            "u128" => Some(Instruction::UInt(16)),
 
-            "int8" | "i8" => Some(Instruction::Int(1)),
-            "int16" | "i16" => Some(Instruction::Int(2)),
-            "int32" | "i32" => Some(Instruction::Int(4)),
-            "int64" | "i64" => Some(Instruction::Int(8)),
-            "int128" | "i128" => Some(Instruction::Int(16)),
+            "i8" => Some(Instruction::Int(1)),
+            "i16" => Some(Instruction::Int(2)),
+            "i32" => Some(Instruction::Int(4)),
+            "i64" => Some(Instruction::Int(8)),
+            "i128" => Some(Instruction::Int(16)),
 
-            "uleb128" | "varuint32" => Some(Instruction::VarUInt),
-            "sleb128" | "varint32" => Some(Instruction::VarInt),
+            "uleb128" => Some(Instruction::Leb128(false)),
+            "sleb128" => Some(Instruction::Leb128(true)),
 
-            "float32" | "f32" => Some(Instruction::Float(4)),
-            "float64" | "f64" => Some(Instruction::Float(8)),
-            "float128" | "f128" => Some(Instruction::Float(16)),
+            "f32" => Some(Instruction::Float(4)),
+            "f64" => Some(Instruction::Float(8)),
 
             "bytes" => Some(Instruction::Bytes),
-            "str" | "string" => Some(Instruction::String),
-
-            "sum160" => Some(Instruction::BytesRaw(U48(20))),
-            "sum256" => Some(Instruction::BytesRaw(U48(32))),
-            "sum512" => Some(Instruction::BytesRaw(U48(64))),
+            "str" => Some(Instruction::String),
 
             "raw" => Some(Instruction::BytesRaw(U48(0))),
 

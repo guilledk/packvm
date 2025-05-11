@@ -22,10 +22,7 @@ impl<'py> IntoPyObject<'py> for Value {
             } else {
                 Ok(num.as_i128().unwrap().into_bound_py_any(py)?)
             },
-            Value::VarInt32(num) => Ok(num.into_bound_py_any(py)?),
-            Value::VarUInt32(num) => Ok(num.into_bound_py_any(py)?),
             Value::Float(num) => Ok(num.as_f64().into_bound_py_any(py)?),
-            Value::Float128(num) => Ok(num.into_bound_py_any(py)?),
             Value::String(s) => Ok(s.into_bound_py_any(py)?),
             Value::Bytes(bytes) => Ok(bytes.into_bound_py_any(py)?),
             Value::Array(values) => {

@@ -18,4 +18,5 @@ categories = ["encoding"]
 
 [workspace.dependencies]
 packvm-macros.path = "crates/macros"
-antelope-client.path = "../antelope-rs/crates/antelope"
+antelope-client = { git = "https://github.com/openrepublic/antelope-rs.git", rev = "1f3fe8c45cf9674f45c612cf2358987a0d84d1b4" }
+# antelope-client.path = "../antelope-rs/crates/antelope"

@@ -6,15 +6,13 @@ use crate::{
     isa_impl::{unpack}
 };
 use crate::compiler::assembly::Executable;
+use crate::compiler::RESERVED_IDS;
 use crate::isa_impl::pack;
 use crate::utils::numbers::U48;
 
 /// Always points at the *slot* the current opcode writes into.
 #[derive(Debug, Clone)]
 pub struct ValueCursor {
-    ///   0 = &mut vm.io  (root)
-    ///   1 = first level container
-    ///   …
     stack: Vec<std::ptr::NonNull<Value>>,
 }
 
@@ -102,7 +100,7 @@ impl PackVM {
         let mut val = io.clone();
         unsafe { self.cursor.push(&mut val as *mut _); }
 
-        self.ip = program;
+        self.ip = program - U48::from(RESERVED_IDS);
 
         debug_log!("Running pack program: {}", program);
 
@@ -120,7 +118,7 @@ impl PackVM {
         let mut val = Value::None;
         unsafe { self.cursor.push(&mut val as *mut _); }
 
-        self.ip = program;
+        self.ip = program - U48::from(RESERVED_IDS);
 
         debug_log!("Running unpack program: {}", program);
 

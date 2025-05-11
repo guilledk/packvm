@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use bimap::BiHashMap;
-use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef};
+use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, RESERVED_IDS};
 use crate::{debug_log, get_str_or_unknown};
 use crate::isa::Instruction;
 use crate::compiler_error;
@@ -104,7 +104,7 @@ fn assemble_sections<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
     executable: &mut Vec<Instruction>,
@@ -132,9 +132,6 @@ fn assemble_sections<
                 Instruction::Jmp(jptr) => {
                     executable[ptr] = Instruction::Jmp(start_ptr + jptr);
                 },
-                // Instruction::JmpVariant(cnd, jptr) => {
-                //     executable[ptr] = Instruction::JmpVariant(cnd, jptr);
-                // }
                 Instruction::JmpArrayCND(_) => {
                     executable[ptr] = Instruction::JmpArrayCND(U48(ptr as u64 - 1));
                 }
@@ -184,17 +181,20 @@ pub fn assemble<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Debug
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
 ) -> Result<Executable, TypeCompileError> {
-    let mut code = vec![Instruction::Jmp(U48(0))];
+    let mut code = vec![];
+    // for i in 0..RESERVED_IDS {
+    //     code.push(Instruction::Jmp(U48::from(i)));
+    // }
 
     // namespace .into_iter() is guaranteed to be in order of pid
     for program in src_ns.into_iter() {
         // insert jump table entry for program, for now ptr will just contain the pid
         // will be fixed during section assembly
-        code.insert(usize::from(program.id), Instruction::Jmp(program.id));
+        code.insert(program.index(), Instruction::Jmp(program.id));
     }
 
     let mut sections = HashMap::new();
@@ -202,7 +202,7 @@ pub fn assemble<
         let section_ptr = U48::from(code.len());
         sections.insert(program.id, section_ptr);
         // fix jump table entry
-        code[usize::from(program.id)] = Instruction::Jmp(section_ptr);
+        code[program.index()] = Instruction::Jmp(section_ptr);
         // append program code at the end of executable
         code.extend(program.code.clone());
     }
@@ -221,13 +221,13 @@ pub fn assemble<
     #[cfg(feature = "debug")]
     {
         // validate
-        for (jmp_i, op) in exec.code[1..src_ns.len()].iter().cloned().enumerate() {
+        for (jmp_i, op) in exec.code[..src_ns.len()].iter().cloned().enumerate() {
             match op {
                 Instruction::Jmp(ptr) => {
-                    let jmp_i = jmp_i + 1;
+                    let pid = U48::from(jmp_i + RESERVED_IDS);
 
-                    let src_program = src_ns.get_program(&U48::from(jmp_i))
-                        .ok_or(compiler_error!("Couldn't find source program: {}", jmp_i))?;
+                    let src_program = src_ns.get_program(&pid)
+                        .ok_or(compiler_error!("Couldn't find source program: {}", pid))?;
 
                     let mut i = usize::from(ptr);
                     while !exec.code[i].cmp_type(&Instruction::Exit) {
@@ -235,7 +235,7 @@ pub fn assemble<
                         let asm_op = &exec.code[i];
                         let src_op = &src_program.code[rel_i];
                         if !src_op.cmp_type(asm_op) {
-                            debug_log!("{} different at {}: {:?} -> {:?}", jmp_i, i, src_op, asm_op);
+                            debug_log!("{} different at {}: {:?} -> {:?}", pid, i, src_op, asm_op);
                             debug_log!("Source:\n{:#?}", src_program);
                             return Err(compiler_error!("Validation falied!"));
                         }

@@ -1,3 +1,47 @@
+// https://github.com/AntelopeIO/leap/blob/92b6fec5e949660bae78e90ebf555fe71ab06940/libraries/chain/abi_serializer.cpp#L89
+
+/*
+    void abi_serializer::configure_built_in_types() {
+        built_in_types.emplace("bool",                      pack_unpack<uint8_t>());
+        built_in_types.emplace("int8",                      pack_unpack<int8_t>());
+        built_in_types.emplace("uint8",                     pack_unpack<uint8_t>());
+        built_in_types.emplace("int16",                     pack_unpack<int16_t>());
+        built_in_types.emplace("uint16",                    pack_unpack<uint16_t>());
+        built_in_types.emplace("int32",                     pack_unpack<int32_t>());
+        built_in_types.emplace("uint32",                    pack_unpack<uint32_t>());
+        built_in_types.emplace("int64",                     pack_unpack<int64_t>());
+        built_in_types.emplace("uint64",                    pack_unpack<uint64_t>());
+        built_in_types.emplace("int128",                    pack_unpack<int128_t>());
+        built_in_types.emplace("uint128",                   pack_unpack<uint128_t>());
+        built_in_types.emplace("varint32",                  pack_unpack<fc::signed_int>());
+        built_in_types.emplace("varuint32",                 pack_unpack<fc::unsigned_int>());
+
+        built_in_types.emplace("float32",                   pack_unpack<float>());
+        built_in_types.emplace("float64",                   pack_unpack<double>());
+        built_in_types.emplace("float128",                  pack_unpack<float128_t>());
+
+        built_in_types.emplace("time_point",                pack_unpack<fc::time_point>());
+        built_in_types.emplace("time_point_sec",            pack_unpack<fc::time_point_sec>());
+        built_in_types.emplace("block_timestamp_type",      pack_unpack<block_timestamp_type>());
+
+        built_in_types.emplace("name",                      pack_unpack<name>());
+
+        built_in_types.emplace("bytes",                     pack_unpack<bytes>());
+        built_in_types.emplace("string",                    pack_unpack<string>());
+
+        built_in_types.emplace("checksum160",               pack_unpack<checksum160_type>());
+        built_in_types.emplace("checksum256",               pack_unpack<checksum256_type>());
+        built_in_types.emplace("checksum512",               pack_unpack<checksum512_type>());
+
+        built_in_types.emplace("public_key",                pack_unpack_deadline<public_key_type>());
+        built_in_types.emplace("signature",                 pack_unpack_deadline<signature_type>());
+
+        built_in_types.emplace("symbol",                    pack_unpack<symbol>());
+        built_in_types.emplace("symbol_code",               pack_unpack<symbol_code>());
+        built_in_types.emplace("asset",                     pack_unpack<asset>());
+        built_in_types.emplace("extended_asset",            pack_unpack<extended_asset>());
+    }
+*/
 use std::collections::HashMap;
 use antelope::{
     chain::{
@@ -57,13 +101,25 @@ impl StructDef<AbiField> for AbiStruct {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct AntelopeSourceCode {
     aliases: Vec<AbiTypeDef>,
     structs: Vec<AbiStruct>,
     enums: Vec<AbiVariant>,
 }
 
+impl Default for AntelopeSourceCode {
+    fn default() -> Self {
+        let mut aliases = vec![];
+        let mut structs = vec![];
+        include_antelope_stdtypes(&mut aliases, &mut structs);
+        Self {
+            aliases,
+            structs,
+            enums: Default::default(),
+        }
+    }
+}
 
 fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), TypeCompileError> {
     if s.base != "" {
@@ -94,21 +150,41 @@ fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), 
 
 fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<AbiStruct>) {
     for (new_type, alias_type) in [
+        ("uint8", "u8"),
+        ("uint16", "u16"),
+        ("uint32", "u32"),
+        ("uint64", "u64"),
+        ("uint128", "u128"),
+
+        ("int8", "i8"),
+        ("int16", "i16"),
+        ("int32", "i32"),
+        ("int64", "i64"),
+        ("int128", "i128"),
+
+        ("varuint32", "uleb128"),
+        ("varint32", "sleb128"),
+
+        ("float32", "f32"),
+        ("float64", "f64"),
+        ("float128", "raw(16)"),
+
+        ("string", "str"),
+
         ("name", "u64"),
         ("account_name", "u64"),
 
         ("symbol", "u64"),
         ("symbol_code", "u64"),
 
-        ("rd160", "sum160"),
-        ("checksum160", "sum160"),
+        ("rd160", "raw(20)"),
+        ("checksum160", "raw(20)"),
 
-        ("sha256", "sum256"),
-        ("checksum256", "sum256"),
+        ("sha256", "raw(32)"),
+        ("checksum256", "raw(32)"),
+        ("transaction_id", "raw(32)"),
 
-        ("checksum512", "sum512"),
-
-        ("transaction_id", "sum256"),
+        ("checksum512", "raw(64)"),
 
         ("time_point", "u64"),
         ("time_point_sec", "u32"),
@@ -117,7 +193,7 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<Ab
         ("public_key", "raw(34)"),
         ("signature", "raw(66)"),
 
-    ] {
+    ].iter().rev() {
         aliases.insert(0, AbiTypeDef {
             new_type_name: new_type.to_string(),
             r#type: alias_type.to_string()
