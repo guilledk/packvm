@@ -296,7 +296,10 @@ impl SourceCode<AbiTypeDef, AbiField, AbiVariant, AbiStruct> for AntelopeSourceC
     }
 
     fn resolve_alias(&self, alias: &str) -> Option<String> {
-        self.aliases.iter().find(|a| a.new_type_name == alias).map(|t| t.r#type.clone())
+        self.aliases
+            .iter()
+            .find(|a| a.new_type_name == alias)
+            .map(|t| t.r#type.clone())
     }
 
     fn is_std_type(&self, ty: &str) -> bool {

@@ -147,13 +147,9 @@ fn assemble_sections<
                         ))
                     }?;
 
-                    let str_id = *src_ns
-                        .strings
-                        .get_by_right(field_name.as_str())
-                        .ok_or(compiler_error!(
-                            "Couldn't find absolute id of field str: {}",
-                            field_name
-                        ))?;
+                    let str_id = *src_ns.strings.get_by_right(field_name.as_str()).ok_or(
+                        compiler_error!("Couldn't find absolute id of field str: {}", field_name),
+                    )?;
 
                     executable[ptr] = Instruction::Field(str_id);
                 }

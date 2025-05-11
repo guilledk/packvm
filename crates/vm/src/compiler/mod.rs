@@ -258,9 +258,7 @@ impl<
     type IntoIter = std::vec::IntoIter<&'a Program>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let mut programs = self
-            .ns.values()
-            .collect::<Vec<&Program>>();
+        let mut programs = self.ns.values().collect::<Vec<&Program>>();
         programs.sort_by(|a, b| a.id.cmp(&b.id));
         programs.into_iter()
     }
@@ -317,18 +315,11 @@ pub fn compile_type_ops<
     }
 
     if src.enums().iter().any(|v| v.name() == type_name)
-        || src
-            .structs()
-            .iter()
-            .any(|s| s.name() == type_name)
+        || src.structs().iter().any(|s| s.name() == type_name)
     {
-        return Ok(Instruction::JmpRet(
-            src.program_id_for(&type_name)
-                .ok_or(compiler_error!(
-                    "Failed to resolve id of program: {}",
-                    type_name
-                ))?,
-        ));
+        return Ok(Instruction::JmpRet(src.program_id_for(&type_name).ok_or(
+            compiler_error!("Failed to resolve id of program: {}", type_name),
+        )?));
     }
 
     Err(compiler_error!(
@@ -500,19 +491,16 @@ pub fn compile_type<
     if let Some(var_meta) = src.enums().iter().find(|v| v.name() == type_name) {
         return if program.name != var_meta.name() {
             program.code.push(Instruction::JmpRet(
-                src.program_id_for(var_meta.name())
-                    .ok_or(compiler_error!(
-                        "Failed to resolve id of program: {}",
-                        var_meta.name()
-                    ))?,
+                src.program_id_for(var_meta.name()).ok_or(compiler_error!(
+                    "Failed to resolve id of program: {}",
+                    var_meta.name()
+                ))?,
             ));
             Ok(())
         } else {
             let maybe_err = compile_enum(src, var_meta, 3);
-            let var_opts = ok_or_raise(
-                maybe_err,
-                format_args!("while compiling enum: {type_name}"),
-            )?;
+            let var_opts =
+                ok_or_raise(maybe_err, format_args!("while compiling enum: {type_name}"))?;
             program.code.extend(var_opts);
             Ok(())
         };
