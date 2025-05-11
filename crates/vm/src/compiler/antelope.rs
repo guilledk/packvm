@@ -131,7 +131,7 @@ impl Default for AntelopeSourceCode {
 }
 
 fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), TypeCompileError> {
-    if s.base != "" {
+    if !s.base.is_empty() {
         let (resolved_type, _) =
             abi.resolve_type(&s.base)
                 .ok_or(TypeCompileError::new(format_args!(
@@ -142,8 +142,7 @@ fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), 
         let base_fields = match resolved_type {
             ABIResolvedType::Struct(struct_meta) => Ok(struct_meta.fields.clone()),
             _ => Err(TypeCompileError::new(format_args!(
-                "Expected base field type to be a struct but got {:?}",
-                resolved_type
+                "Expected base field type to be a struct but got {resolved_type:?}"
             ))),
         }?;
 
@@ -297,11 +296,7 @@ impl SourceCode<AbiTypeDef, AbiField, AbiVariant, AbiStruct> for AntelopeSourceC
     }
 
     fn resolve_alias(&self, alias: &str) -> Option<String> {
-        if let Some(t) = self.aliases.iter().find(|a| a.new_type_name == alias) {
-            Some(t.r#type.clone())
-        } else {
-            None
-        }
+        self.aliases.iter().find(|a| a.new_type_name == alias).map(|t| t.r#type.clone())
     }
 
     fn is_std_type(&self, ty: &str) -> bool {
@@ -319,7 +314,7 @@ impl SourceCode<AbiTypeDef, AbiField, AbiVariant, AbiStruct> for AntelopeSourceC
     }
 
     fn is_variant(&self, ty: &str) -> bool {
-        self.enums.iter().find(|e| e.name == ty).is_some()
+        self.enums.iter().any(|e| e.name == ty)
     }
 
     fn is_variant_of(&self, ty: &str, var: &str) -> bool {
@@ -381,7 +376,7 @@ where
 impl From<BinaryExtension<u128>> for Value {
     fn from(value: BinaryExtension<u128>) -> Value {
         match value.value() {
-            Some(v) => v.clone().into(),
+            Some(v) => (*v).into(),
             None => Value::None,
         }
     }
@@ -495,11 +490,9 @@ impl From<Vec<WaitWeight>> for Value {
 
 impl From<Signature> for Value {
     fn from(value: Signature) -> Self {
-        match value.key_type {
-            _ => Value::Struct(HashMap::from([
-                ("key_type".to_string(), value.key_type.into()),
-                ("value".to_string(), value.value.into()),
-            ])),
-        }
+        Value::Struct(HashMap::from([
+            ("key_type".to_string(), value.key_type.into()),
+            ("value".to_string(), value.value.into()),
+        ]))
     }
 }

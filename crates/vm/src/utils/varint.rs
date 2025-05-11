@@ -146,11 +146,11 @@ mod tests {
 
         // encode
         let (buf, len) = var.encode();
-        assert_eq!(len, var.encoded_len(), "encoded_len mismatch for {}", v);
+        assert_eq!(len, var.encoded_len(), "encoded_len mismatch for {v}");
 
         // decode the exact slice
         let (decoded, used) = VarUInt32::decode(&buf[..len]).expect("decode failed");
-        assert_eq!(used, len, "decode consumed unexpected length for {}", v);
+        assert_eq!(used, len, "decode consumed unexpected length for {v}");
         assert_eq!(u32::from(decoded), v, "round-trip value mismatch");
 
         // decode from a longer buffer (should ignore the tail)
@@ -166,10 +166,10 @@ mod tests {
         let var = VarInt32(v);
 
         let (buf, len) = var.encode();
-        assert_eq!(len, var.encoded_len(), "encoded_len mismatch for {}", v);
+        assert_eq!(len, var.encoded_len(), "encoded_len mismatch for {v}");
 
         let (decoded, used) = VarInt32::decode(&buf[..len]).expect("decode failed");
-        assert_eq!(used, len, "decode consumed unexpected length for {}", v);
+        assert_eq!(used, len, "decode consumed unexpected length for {v}");
         assert_eq!(i32::from(decoded), v, "round-trip value mismatch");
 
         let mut long = [0u8; 16];

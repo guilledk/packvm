@@ -269,9 +269,9 @@ fn test_unpack_struct() {
     let decoded = run_unpack!(vm, pid, enc.get_bytes());
 
     if let Some(diffs) = diff_values(&decoded, &expected) {
-        println!("Expected: {:#?}", expected);
-        println!("Actual:   {:#?}", decoded);
-        println!("{:?}", diffs);
+        println!("Expected: {expected:#?}");
+        println!("Actual:   {decoded:#?}");
+        println!("{diffs:?}");
     }
 
     assert_eq!(decoded, expected);
@@ -321,10 +321,10 @@ fn test_unpack_signature() {
                 KeyType::from_index(raw_sig[0]).unwrap(),
             )
         } else {
-            panic!("failed to unpack signature expected bytes: {:?}", sig_field);
+            panic!("failed to unpack signature expected bytes: {sig_field:?}");
         }
     } else {
-        panic!("failed to unpack signature expected map: {:?}", decoded);
+        panic!("failed to unpack signature expected map: {decoded:?}");
     };
 
     assert_eq!(sig, dec_sig);

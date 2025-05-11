@@ -18,7 +18,7 @@ use std::marker::PhantomData;
 #[inline(always)]
 pub fn ok_or_panic<T, E: Error>(maybe_err: Result<T, E>) -> T {
     {
-        maybe_err.unwrap_or_else(|e| panic!("Compiler error:\n\t{}", e.to_string()))
+        maybe_err.unwrap_or_else(|e| panic!("Compiler error:\n\t{e}"))
     }
 }
 
@@ -169,7 +169,7 @@ impl<
             src: src.clone(),
             ns: HashMap::default(),
             strings: BiHashMap::default(),
-            _marker: PhantomData::default(),
+            _marker: PhantomData,
         }
     }
 
@@ -207,7 +207,7 @@ impl<
         self.ns.len()
     }
 
-    pub fn calculate_string_map(&mut self) -> () {
+    pub fn calculate_string_map(&mut self) {
         self.strings.clear();
 
         // insert reserved strings
@@ -217,7 +217,7 @@ impl<
                 .insert(U48::from(i), format!("__reserved_{}", STD_TYPES[i - 1]));
         }
 
-        let mut field_id = U48::from(self.len() + RESERVED_IDS).into();
+        let mut field_id = U48::from(self.len() + RESERVED_IDS);
         for program in self.into_iter().cloned().collect::<Vec<Program>>() {
             self.strings.insert(program.id, program.name.clone());
             for string in &program.strings {
@@ -259,9 +259,7 @@ impl<
 
     fn into_iter(self) -> Self::IntoIter {
         let mut programs = self
-            .ns
-            .iter()
-            .map(|(_name, prog)| prog)
+            .ns.values()
             .collect::<Vec<&Program>>();
         programs.sort_by(|a, b| a.id.cmp(&b.id));
         programs.into_iter()
@@ -277,7 +275,7 @@ impl Debug for Program {
         )?;
         writeln!(f, "Code: [")?;
         for (idx, op) in self.code.iter().enumerate() {
-            writeln!(f, "\t{:3}: {:?}", idx, op)?;
+            writeln!(f, "\t{idx:3}: {op:?}")?;
         }
         writeln!(f, "]")
     }
@@ -318,20 +316,18 @@ pub fn compile_type_ops<
         return Ok(Instruction::IO(std_op));
     }
 
-    if src.enums().iter().find(|v| v.name() == type_name).is_some()
+    if src.enums().iter().any(|v| v.name() == type_name)
         || src
             .structs()
             .iter()
-            .find(|s| s.name() == type_name)
-            .is_some()
+            .any(|s| s.name() == type_name)
     {
         return Ok(Instruction::JmpRet(
             src.program_id_for(&type_name)
                 .ok_or(compiler_error!(
                     "Failed to resolve id of program: {}",
                     type_name
-                ))?
-                .clone(),
+                ))?,
         ));
     }
 
@@ -473,7 +469,7 @@ pub fn compile_type<
         let maybe_err = compile_optional(src, &type_name, 3);
         let opt_code = ok_or_raise(
             maybe_err,
-            format_args!("while compiling optional {}:", type_name),
+            format_args!("while compiling optional {type_name}:"),
         )?;
         program.code.extend(opt_code);
         return Ok(());
@@ -484,7 +480,7 @@ pub fn compile_type<
         let maybe_err = compile_extension(src, &type_name, 3);
         let ext_code = ok_or_raise(
             maybe_err,
-            format_args!("while compiling extension: {}", type_name),
+            format_args!("while compiling extension: {type_name}"),
         )?;
         program.code.extend(ext_code);
         return Ok(());
@@ -495,7 +491,7 @@ pub fn compile_type<
         let maybe_err = compile_array(src, &type_name, 3);
         let arr_code = ok_or_raise(
             maybe_err,
-            format_args!("while compiling array: {}", type_name),
+            format_args!("while compiling array: {type_name}"),
         )?;
         program.code.extend(arr_code);
         return Ok(());
@@ -508,15 +504,14 @@ pub fn compile_type<
                     .ok_or(compiler_error!(
                         "Failed to resolve id of program: {}",
                         var_meta.name()
-                    ))?
-                    .clone(),
+                    ))?,
             ));
             Ok(())
         } else {
             let maybe_err = compile_enum(src, var_meta, 3);
             let var_opts = ok_or_raise(
                 maybe_err,
-                format_args!("while compiling enum: {}", type_name),
+                format_args!("while compiling enum: {type_name}"),
             )?;
             program.code.extend(var_opts);
             Ok(())
@@ -530,8 +525,7 @@ pub fn compile_type<
                     .ok_or(compiler_error!(
                         "Failed to resolve id of program: {}",
                         struct_meta.name()
-                    ))?
-                    .clone(),
+                    ))?,
             ));
             Ok(())
         } else {
@@ -541,7 +535,7 @@ pub fn compile_type<
                 match instruction_for!(field.type_name()) {
                     Some(op) => program.code.push(Instruction::IO(op)),
                     None => {
-                        compile_type(src, &field.type_name(), program)?;
+                        compile_type(src, field.type_name(), program)?;
                     }
                 }
             }
@@ -575,9 +569,9 @@ pub fn compile_program<
         return Ok(());
     }
 
-    let mut program = namespace.get_program_or_init(&program_name)?;
+    let program = namespace.get_program_or_init(&program_name)?;
 
-    compile_type(src, &program_name, &mut program).map_err(|e| {
+    compile_type(src, &program_name, program).map_err(|e| {
         compiler_error!(
             "\n\tWhile compiling program {}:\n\t{}",
             program_name,
@@ -593,11 +587,8 @@ pub fn compile_program<
 
     // gather dependencies
     for op in program.code.iter() {
-        match op {
-            Instruction::JmpRet(id) => {
-                program.deps.insert(*id);
-            }
-            _ => (),
+        if let Instruction::JmpRet(id) = op {
+            program.deps.insert(*id);
         }
     }
 

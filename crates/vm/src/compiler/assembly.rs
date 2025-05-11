@@ -26,14 +26,14 @@ impl Debug for Executable {
         writeln!(f, "Executable:",)?;
         writeln!(f, "Code: [")?;
         for (idx, op) in self.code.iter().enumerate() {
-            writeln!(f, "\t{:3}: {:?}", idx, op)?;
+            writeln!(f, "\t{idx:3}: {op:?}")?;
         }
         writeln!(f, "]")?;
         writeln!(f, "Strings: [")?;
         for i in 0..self.str_map.len() {
-            let not_str = format!("unknown {}", i);
+            let not_str = format!("unknown {i}");
             let str = self.str_map.get_by_left(&U48::from(i)).unwrap_or(&not_str);
-            writeln!(f, "\t{:4}: {:?}", i, str)?;
+            writeln!(f, "\t{i:4}: {str:?}")?;
         }
         writeln!(f, "]")
     }
@@ -50,11 +50,11 @@ impl Executable {
                     _ => unreachable!(),
                 };
                 let sec_str = get_str_or_unknown!(self.str_map, id);
-                format!("{} {}", type_str, sec_str)
+                format!("{type_str} {sec_str}")
             }
             Instruction::JmpRet(ptr) => self.simple_jmp_str(*ptr),
             Instruction::JmpVariant(_, ptr) => self.simple_jmp_str(U48(*ptr as u64)),
-            _ => format!("{:?}", op),
+            _ => format!("{op:?}"),
         }
     }
     pub fn pretty_op_string(&self, i: U48) -> String {
@@ -67,7 +67,7 @@ impl Executable {
                     _ => unreachable!(),
                 };
                 let sec_str = get_str_or_unknown!(self.str_map, id);
-                format!("Section({}, {})", type_str, sec_str)
+                format!("Section({type_str}, {sec_str})")
             }
             Instruction::Field(id) => format!("Field({})", get_str_or_unknown!(self.str_map, id)),
             Instruction::Jmp(ptr) => format!("{:?} -> {}", op, self.simple_jmp_str(*ptr)),
@@ -81,7 +81,7 @@ impl Executable {
                     self.simple_jmp_str(U48::from(*ptr as u64))
                 )
             }
-            _ => format!("{:?}", op),
+            _ => format!("{op:?}"),
         }
     }
 
@@ -110,10 +110,9 @@ fn assemble_sections<
     let mut sec_keys = sections.keys().collect::<Vec<&U48>>();
     sec_keys.sort();
     for sec_name in sec_keys {
-        let start_ptr = sections
+        let start_ptr = *sections
             .get(sec_name)
-            .ok_or(compiler_error!("Couldn't find section {}", sec_name))?
-            .clone();
+            .ok_or(compiler_error!("Couldn't find section {}", sec_name))?;
 
         let sec_program = src_ns.get_program(sec_name).ok_or(compiler_error!(
             "Couldn't find section program {}",
@@ -148,23 +147,21 @@ fn assemble_sections<
                         ))
                     }?;
 
-                    let str_id = src_ns
+                    let str_id = *src_ns
                         .strings
                         .get_by_right(field_name.as_str())
                         .ok_or(compiler_error!(
                             "Couldn't find absolute id of field str: {}",
                             field_name
-                        ))?
-                        .clone();
+                        ))?;
 
                     executable[ptr] = Instruction::Field(str_id);
                 }
                 Instruction::JmpRet(id) => {
                     executable[ptr] = Instruction::JmpRet(
-                        sections
+                        *sections
                             .get(&id)
-                            .ok_or(compiler_error!("Couldn't find section {}", id))?
-                            .clone(),
+                            .ok_or(compiler_error!("Couldn't find section {}", id))?,
                     );
                 }
                 _ => (),

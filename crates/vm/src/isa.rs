@@ -12,7 +12,7 @@ impl<'a> Debug for HexSlice<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("0x")?;
         for byte in self.0 {
-            write!(f, "{:02x}", byte)?;
+            write!(f, "{byte:02x}")?;
         }
         Ok(())
     }
@@ -193,18 +193,18 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Value::None => write!(f, "None"),
-            Value::Bool(v) => write!(f, "{}", v),
+            Value::Bool(v) => write!(f, "{v}"),
 
-            Value::Int(v) => write!(f, "{}", v),
-            Value::Long(v) => write!(f, "{}", v),
+            Value::Int(v) => write!(f, "{v}"),
+            Value::Long(v) => write!(f, "{v}"),
 
-            Value::Float(v) => write!(f, "{}", v),
+            Value::Float(v) => write!(f, "{v}"),
 
             Value::Bytes(vec) => write!(f, "Bytes({:?})", HexSlice(vec)),
-            Value::String(s) => write!(f, "String({})", s),
+            Value::String(s) => write!(f, "String({s})"),
 
-            Value::Array(vals) => write!(f, "Array({:?})", vals),
-            Value::Struct(fields) => write!(f, "Struct({:?})", fields),
+            Value::Array(vals) => write!(f, "Array({vals:?})"),
+            Value::Struct(fields) => write!(f, "Struct({fields:?})"),
         }
     }
 }

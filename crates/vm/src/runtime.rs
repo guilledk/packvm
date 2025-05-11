@@ -139,7 +139,7 @@ impl PackVM {
     }
 
     #[inline(always)]
-    pub fn set_cnd(&mut self, cnd: u32) -> () {
+    pub fn set_cnd(&mut self, cnd: u32) {
         let cnd = cnd.to_le_bytes();
         self.ram[self.rp] = cnd[0];
         self.ram[self.rp + 1] = cnd[1];
@@ -155,13 +155,13 @@ impl PackVM {
     }
 
     #[inline(always)]
-    pub fn push_cnd(&mut self, cnd: u32) -> () {
+    pub fn push_cnd(&mut self, cnd: u32) {
         self.rp += 4;
         self.set_cnd(cnd);
     }
 
     #[inline(always)]
-    pub fn pop_cnd(&mut self) -> () {
+    pub fn pop_cnd(&mut self) {
         self.rp -= 4;
     }
 }
