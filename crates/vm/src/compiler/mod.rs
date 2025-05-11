@@ -10,7 +10,7 @@ use std::fmt::Debug;
 use std::marker::PhantomData;
 use bimap::BiHashMap;
 use crate::{debug_log, instruction_for};
-use crate::isa::{Instruction, STD_TYPES};
+use crate::isa::{DataInstruction, Instruction, STD_TYPES};
 use crate::compiler_error;
 use crate::utils::{TypeCompileError};
 use crate::utils::numbers::U48;
@@ -328,7 +328,7 @@ pub fn compile_type_ops<
     };
 
     if let Some(std_op) = instruction_for!(type_name.as_str()) {
-        return Ok(std_op);
+        return Ok(Instruction::IO(std_op));
     }
 
     if src.enums().iter().find(|v| v.name() == type_name).is_some() ||
@@ -483,7 +483,7 @@ pub fn compile_type<
     };
 
     if let Some(op) = instruction_for!(type_name.as_str()) {
-        program.code.push(op);
+        program.code.push(Instruction::IO(op));
         return Ok(());
     }
 
@@ -563,7 +563,7 @@ pub fn compile_type<
                 program.code.push(Instruction::Field(i.into()));
                 program.strings.push(field.name().to_string());
                 match instruction_for!(field.type_name()) {
-                    Some(op) => program.code.push(op),
+                    Some(op) => program.code.push(Instruction::IO(op)),
                     None => {
                         compile_type(src, &field.type_name(), program)?;
                     },

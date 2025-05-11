@@ -10,7 +10,10 @@ use crate::compiler::RESERVED_IDS;
 use crate::isa_impl::pack;
 use crate::utils::numbers::U48;
 
-/// Always points at the *slot* the current opcode writes into.
+/// ValueCursor allows PackVM to keep track where in a nested Value is the next operation going to
+/// touch, be for fetching a value to pack or unpacking the next bytes
+/// # Safety
+/// The caller guarantees every pushed pointer lives as long as the cursor
 #[derive(Debug, Clone)]
 pub struct ValueCursor {
     stack: Vec<std::ptr::NonNull<Value>>,
@@ -22,9 +25,6 @@ impl ValueCursor {
         self.stack.len()
     }
 
-    /// # Safety
-    /// The caller guarantees every pushed pointer lives as long as the cursor
-    /// (that’s true while we mutate only through `vm.io`).
     #[inline(always)]
     pub unsafe fn push(&mut self, ptr: *mut Value) {
         self.stack.push(std::ptr::NonNull::new_unchecked(ptr));
@@ -46,16 +46,20 @@ impl ValueCursor {
     }
 }
 
+pub const PACKVM_RAM: usize = 1024 * 16;  // 16kb
+
 #[derive(Clone)]
 pub struct PackVM {
-    pub(crate) ip: U48,
-    pub(crate) bp: usize,  // only for unpack
-    pub(crate) fp: U48,  // next field id
-    pub(crate) et: u32,  // next enum variant index
-    pub(crate) ef: bool,  // on unpack, used to not repeat enum -> struct double push
+    pub(crate) bp: usize,  // buffer pointer: only needed for unpack
+    pub(crate) ip: U48,  // instruction pointer
+    pub(crate) fp: U48,  // field pointer: next field id
+    pub(crate) et: u32,  // enum type: next enum variant index
+    pub(crate) ef: bool,  // emum flag: on unpack, used to not repeat enum -> struct double push
 
-    pub(crate) cndstack: Vec<u32>,
-    pub(crate) retstack: Vec<U48>,
+    pub(crate) rp: usize,  // ram pointer
+    pub(crate) ram: [u8; PACKVM_RAM],
+
+    pub(crate) retstack: Vec<U48>,  // return stack: used by JmpRet & Exit instruction
 
     pub(crate) cursor: ValueCursor,
     pub(crate) executable: Executable
@@ -65,13 +69,15 @@ impl PackVM {
     pub fn from_executable(executable: Executable) -> Self {
         debug_log!("Initialized VM with executable: \n{}", executable.pretty_string());
         PackVM {
+            bp: 0,
             ip: U48(0),
             fp: U48(0),
-            bp: 0,
             et: 0,
             ef: false,
 
-            cndstack: vec![0],
+            rp: 8,
+            ram: [0; PACKVM_RAM],
+
             retstack: vec![U48(0)],
 
             cursor: ValueCursor { stack: Vec::new() },
@@ -84,7 +90,8 @@ impl PackVM {
         self.fp = U48(0);
         self.ef = false;
 
-        self.cndstack = vec![0];
+        self.rp = 8;
+        self.ram = [0; PACKVM_RAM];
         self.retstack = vec![U48(0)];
 
         self.cursor.stack.clear();
@@ -129,22 +136,46 @@ impl PackVM {
 
     #[inline(always)]
     pub fn cnd(&self) -> u32 {
-        let last = self.cndstack.len() - 1;
-        self.cndstack[last]
+        u32::from_le_bytes(
+            self.ram[self.rp..self.rp + 4]
+                .try_into()
+                .expect("Could not get cnd from ram")
+        )
     }
 
     #[inline(always)]
-    pub fn cnd_mut(&mut self) -> &mut u32 {
-        let last = self.cndstack.len() - 1;
-        &mut self.cndstack[last]
+    pub fn set_cnd(&mut self, cnd: u32) -> () {
+        let cnd = cnd.to_le_bytes();
+        self.ram[self.rp] = cnd[0];
+        self.ram[self.rp + 1] = cnd[1];
+        self.ram[self.rp + 2] = cnd[2];
+        self.ram[self.rp + 3] = cnd[3];
+    }
+
+    #[inline(always)]
+    pub fn sub_cnd(&mut self, delta: u32) -> u32 {
+        let cnd = self.cnd() - delta;
+        self.set_cnd(cnd);
+        cnd
+    }
+
+    #[inline(always)]
+    pub fn push_cnd(&mut self, cnd: u32) -> () {
+        self.rp += 4;
+        self.set_cnd(cnd);
+    }
+
+    #[inline(always)]
+    pub fn pop_cnd(&mut self) -> () {
+        self.rp -= 4;
     }
 }
 
 impl Debug for PackVM {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
-            "ip({:4}) bp({:5}) cnd({:4}) csp({:2}) iop({:2})  | {}",
-            self.ip, self.bp, self.cnd(), self.cndstack.len(), self.cursor.len(),
+            "ip({:4}) bp({:5}) cnd({:4}) rp({:2}) iop({:2})  | {}",
+            self.ip, self.bp, self.cnd(), self.rp, self.cursor.len(),
             self.executable.pretty_op_string(self.ip)
         ))
     }

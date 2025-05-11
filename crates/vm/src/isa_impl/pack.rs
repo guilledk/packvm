@@ -3,6 +3,7 @@
 use tailcall::tailcall;
 
 use crate::{debug_log, exit, field, isa_impl::common::OpResult, jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor, utils::varint::{VarInt32, VarUInt32}, Instruction, PackVM, Value};
+use crate::isa::DataInstruction;
 use crate::utils::numbers::U48;
 
 macro_rules! vmgetio {
@@ -277,7 +278,6 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             Value::Array(arr) => {
                 if !arr.is_empty() {
                     let cnd = arr.len() as u32;
-                    vm.cndstack.push(cnd);
                     vmstep!(vm);
                     child_ptr = slot as *mut _;
                     cnd
@@ -300,6 +300,10 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
 
         cnd
     };
+
+    if cnd > 0 {
+        vm.push_cnd(cnd);
+    }
 
     let (raw, len) = VarUInt32(cnd).encode();
     vmpack!(vm, buf, &raw[..len]);
@@ -348,54 +352,59 @@ fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
 #[tailcall]
 pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
     debug_log!("{:?}", vm);
-    match vm.executable.code[usize::from(vm.ip)] {
-        Instruction::Bool => {
-            boolean(vm, buf)?;
-            exec(vm, buf)
+    match vm.executable.code[vm.ip.0 as usize] {
+        Instruction::IO(ref op) => match op {
+            DataInstruction::Bool => {
+                boolean(vm, buf)?;
+                exec(vm, buf)
+            }
+            DataInstruction::UInt(size) => {
+                if *size == 16 {
+                    long(vm, buf, false)?
+                } else {
+                    integer(vm, buf, *size, false)?
+                };
+                exec(vm, buf)
+            }
+            DataInstruction::Int(size) => {
+                if *size == 16 {
+                    long(vm, buf, true)?
+                } else {
+                    integer(vm, buf, *size, true)?
+                };
+                exec(vm, buf)
+            }
+            DataInstruction::Float(size) => {
+                float(vm, buf, *size)?;
+                exec(vm, buf)
+            }
+            DataInstruction::Leb128(signed) => {
+                leb128(vm, buf, *signed)?;
+                exec(vm, buf)
+            }
+            DataInstruction::Bytes => {
+                bytes(vm, buf)?;
+                exec(vm, buf)
+            }
+            DataInstruction::BytesRaw(size) => {
+                bytes_raw(vm, buf, *size)?;
+                exec(vm, buf)
+            }
+            DataInstruction::String => {
+                string(vm, buf)?;
+                exec(vm, buf)
+            }
         }
-        Instruction::UInt(size) => {
-            if size == 16 {
-                long(vm, buf, false)?
-            } else {
-                integer(vm, buf, size, false)?
-            };
-            exec(vm, buf)
-        }
-        Instruction::Int(size) => {
-            if size == 16 {
-                long(vm, buf, true)?
-            } else {
-                integer(vm, buf, size, true)?
-            };
-            exec(vm, buf)
-        }
-        Instruction::Float(size) => {
-            float(vm, buf, size)?;
-            exec(vm, buf)
-        }
-        Instruction::Leb128(signed) => {
-            leb128(vm, buf, signed)?;
-            exec(vm, buf)
-        }
-        Instruction::Bytes => {
-            bytes(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::BytesRaw(size) => {
-            bytes_raw(vm, buf, size)?;
-            exec(vm, buf)
-        }
-        Instruction::String => {
-            string(vm, buf)?;
-            exec(vm, buf)
-        }
-
         Instruction::Optional => {
             optional(vm, buf)?;
             exec(vm, buf)
         }
         Instruction::Extension => {
             extension(vm)?;
+            exec(vm, buf)
+        }
+        Instruction::Section(ctype, _) => {
+            section(vm, buf, ctype)?;
             exec(vm, buf)
         }
 
@@ -407,7 +416,6 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             popcursor!(vm)?;
             exec(vm, buf)
         }
-
         Instruction::Jmp(ptr) => {
             jmp!(vm, ptr)?;
             exec(vm, buf)
@@ -424,16 +432,10 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             jmpvariant!(vm, v, U48(p as u64))?;
             exec(vm, buf)
         }
-
-        Instruction::Section(ctype, _) => {
-            section(vm, buf, ctype)?;
-            exec(vm, buf)
-        }
         Instruction::Field(name) => {
             field!(vm, name);
             exec(vm, buf)
         }
-
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())

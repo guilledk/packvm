@@ -279,8 +279,7 @@ pub fn diff_values(left: &Value, right: &Value) -> Option<Vec<String>> {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Instruction {
-    // IO manipulation, what to pack/unpack next
+pub enum DataInstruction {
     Bool,
     UInt(u8),
     Int(u8),
@@ -289,33 +288,58 @@ pub enum Instruction {
     Bytes, // bytes with LEB128 encoded size first
     BytesRaw (U48), // raw bytes, if param is > 0 do size check on stack value
     String, // utf-8 string with LEB128 encoded len
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone)]
+pub enum DataOPCode {
+    Bool = 0,
+    UInt = 1,
+    Int = 2,
+    Leb128 = 3,
+    Float = 4,
+    Bytes = 5,
+    BytesRaw = 6,
+    String = 7,
+}
+
+impl From<(DataOPCode, [u8; 6])> for DataInstruction {
+    fn from(op: (DataOPCode, [u8; 6])) -> Self {
+        match op.0 {
+            DataOPCode::Bool => DataInstruction::Bool,
+            DataOPCode::UInt => DataInstruction::UInt(op.1[0]),
+            DataOPCode::Int => DataInstruction::Int(op.1[0]),
+            DataOPCode::Leb128 => DataInstruction::Leb128(op.1[0] == 1),
+            DataOPCode::Float => DataInstruction::Float(op.1[0]),
+            DataOPCode::Bytes => DataInstruction::Bytes,
+            DataOPCode::BytesRaw => DataInstruction::BytesRaw((&op.1).into()),
+            DataOPCode::String => DataInstruction::String,
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Instruction {
+    // IO manipulation, what to pack/unpack next
+    IO(DataInstruction),
 
     Optional,  // next value is optional, encode a flag as a u8 before
     Extension, // extensions are like optionals but they dont encode a flag in a u8
 
-    // structure marks
+    /// structure marks
+    // indicates a new program section
     Section(
-        // indicates a new program section
         u8,    // struct type: 1 = enum, 2 = struct
         U48, // program id
     ),
-
     Field(U48), // indicate field name string id for next value
 
-    // push condition from io into condition stack
-    // used to indicate array len
-    PushCND,
-
-    // maybe pop a node from the cursor stack
-    PopCursor,
-
-    // jumps
-    Jmp(U48), // absolute jmp
+    /// jumps
+    // absolute jmp
+    Jmp(U48),
 
     // perform absolute jmp and return on next Exit instruction
     JmpRet(U48),
-
-    // conditional jumps
 
     // jump depending on et register
     JmpVariant(
@@ -323,8 +347,17 @@ pub enum Instruction {
         u16, // rel location to jump to
     ),
 
+    /// array specific
     // jump to pointer if array cnd > 0
     JmpArrayCND(U48),
+
+    // push condition from io into ram
+    // used to indicate array len
+    PushCND,
+
+    /// other
+    // maybe pop a node from the cursor stack
+    PopCursor,
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,
@@ -380,30 +413,30 @@ macro_rules! is_std_type {
 macro_rules! instruction_for {
     ($ty:expr) => {
         match $ty {
-            "bool" => Some(Instruction::Bool),
+            "bool" => Some(DataInstruction::Bool),
 
-            "u8" => Some(Instruction::UInt(1)),
-            "u16" => Some(Instruction::UInt(2)),
-            "u32" => Some(Instruction::UInt(4)),
-            "u64" => Some(Instruction::UInt(8)),
-            "u128" => Some(Instruction::UInt(16)),
+            "u8" => Some(DataInstruction::UInt(1)),
+            "u16" => Some(DataInstruction::UInt(2)),
+            "u32" => Some(DataInstruction::UInt(4)),
+            "u64" => Some(DataInstruction::UInt(8)),
+            "u128" => Some(DataInstruction::UInt(16)),
 
-            "i8" => Some(Instruction::Int(1)),
-            "i16" => Some(Instruction::Int(2)),
-            "i32" => Some(Instruction::Int(4)),
-            "i64" => Some(Instruction::Int(8)),
-            "i128" => Some(Instruction::Int(16)),
+            "i8" => Some(DataInstruction::Int(1)),
+            "i16" => Some(DataInstruction::Int(2)),
+            "i32" => Some(DataInstruction::Int(4)),
+            "i64" => Some(DataInstruction::Int(8)),
+            "i128" => Some(DataInstruction::Int(16)),
 
-            "uleb128" => Some(Instruction::Leb128(false)),
-            "sleb128" => Some(Instruction::Leb128(true)),
+            "uleb128" => Some(DataInstruction::Leb128(false)),
+            "sleb128" => Some(DataInstruction::Leb128(true)),
 
-            "f32" => Some(Instruction::Float(4)),
-            "f64" => Some(Instruction::Float(8)),
+            "f32" => Some(DataInstruction::Float(4)),
+            "f64" => Some(DataInstruction::Float(8)),
 
-            "bytes" => Some(Instruction::Bytes),
-            "str" => Some(Instruction::String),
+            "bytes" => Some(DataInstruction::Bytes),
+            "str" => Some(DataInstruction::String),
 
-            "raw" => Some(Instruction::BytesRaw(U48(0))),
+            "raw" => Some(DataInstruction::BytesRaw(U48(0))),
 
             _ => {
                 if $ty.starts_with("raw(") {
@@ -412,7 +445,7 @@ macro_rules! instruction_for {
                         .and_then(|s| s.parse::<u64>().ok())
                         .unwrap_or_default());
 
-                    Some(Instruction::BytesRaw(size))
+                    Some(DataInstruction::BytesRaw(size))
                 } else {
                     None
                 }

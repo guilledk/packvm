@@ -185,10 +185,7 @@ pub fn assemble<
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
 ) -> Result<Executable, TypeCompileError> {
-    let mut code = vec![];
-    // for i in 0..RESERVED_IDS {
-    //     code.push(Instruction::Jmp(U48::from(i)));
-    // }
+    let mut code = Vec::default();
 
     // namespace .into_iter() is guaranteed to be in order of pid
     for program in src_ns.into_iter() {

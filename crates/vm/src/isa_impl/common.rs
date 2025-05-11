@@ -34,13 +34,11 @@ macro_rules! jmpvariant {
 #[macro_export]
 macro_rules! jmpacnd {
     ($vm:ident, $ptr:expr) => {{
-        let cnd = $vm.cnd_mut();
-        *cnd -= 1;
-        let cnd = *cnd;
+        let cnd = $vm.sub_cnd(1);
         if cnd > 0 {
             $vm.ip = $ptr;
         } else {
-            $vm.cndstack.pop();
+            $vm.pop_cnd();
             $vm.ip += 1;
         }
         Ok(())

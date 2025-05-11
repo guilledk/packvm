@@ -10,6 +10,7 @@ use crate::{
 };
 use std::collections::HashMap;
 use tailcall::tailcall;
+use crate::isa::DataInstruction;
 
 macro_rules! vmpushio {
     ($vm:ident, $val:expr) => {{
@@ -292,7 +293,7 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
         }
         vmpushio!(vm, Value::Array(arr));
         vmstep!(vm);
-        vm.cndstack.push(cnd.0);
+        vm.push_cnd(cnd.0);
     } else {
         let next_jmpacnd = vm.executable.code[usize::from(vm.ip)..]
             .iter()
@@ -342,101 +343,97 @@ fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
 }
 
 #[tailcall]
-pub fn exec(vm: &mut PackVM, buffer: &[u8]) -> Result<(), PackerError> {
+pub fn exec(vm: &mut PackVM, buf: &[u8]) -> Result<(), PackerError> {
     debug_log!("{:?}", vm);
-    match vm.executable.code[usize::from(vm.ip)] {
-        Instruction::Bool => {
-            boolean(vm, buffer)?;
-            exec(vm, buffer)
+    match vm.executable.code[vm.ip.0 as usize] {
+        Instruction::IO(ref op) => match op {
+            DataInstruction::Bool => {
+                boolean(vm, buf)?;
+                exec(vm, buf)
+            }
+            DataInstruction::UInt(size) => {
+                if *size == 16 {
+                    long(vm, buf, false)?
+                } else {
+                    integer(vm, buf, *size, false)?
+                };
+                exec(vm, buf)
+            }
+            DataInstruction::Int(size) => {
+                if *size == 16 {
+                    long(vm, buf, true)?
+                } else {
+                    integer(vm, buf, *size, true)?
+                };
+                exec(vm, buf)
+            }
+            DataInstruction::Float(size) => {
+                float(vm, buf, *size)?;
+                exec(vm, buf)
+            }
+            DataInstruction::Leb128(signed) => {
+                leb128(vm, buf, *signed)?;
+                exec(vm, buf)
+            }
+            DataInstruction::Bytes => {
+                bytes(vm, buf)?;
+                exec(vm, buf)
+            }
+            DataInstruction::BytesRaw(size) => {
+                bytes_raw(vm, buf, *size)?;
+                exec(vm, buf)
+            }
+            DataInstruction::String => {
+                string(vm, buf)?;
+                exec(vm, buf)
+            }
         }
-
-        Instruction::UInt(size) => {
-            if size == 16 {
-                long(vm, buffer, false)?
-            } else {
-                integer(vm, buffer, size, false)?
-            };
-            exec(vm, buffer)
-        }
-        Instruction::Int(size) => {
-            if size == 16 {
-                long(vm, buffer, true)?
-            } else {
-                integer(vm, buffer, size, true)?
-            };
-            exec(vm, buffer)
-        }
-
-        Instruction::Leb128(signed) => {
-            leb128(vm, buffer, signed)?;
-            exec(vm, buffer)
-        }
-
-        Instruction::Float(size) => {
-            float(vm, buffer, size)?;
-            exec(vm, buffer)
-        },
-
-        Instruction::Bytes => {
-            bytes(vm, buffer)?;
-            exec(vm, buffer)
-        }
-        Instruction::BytesRaw(size) => {
-            bytes_raw(vm, buffer, size)?;
-            exec(vm, buffer)
-        }
-        Instruction::String => {
-            string(vm, buffer)?;
-            exec(vm, buffer)
-        }
-
         Instruction::Optional => {
-            optional(vm, buffer)?;
-            exec(vm, buffer)
+            optional(vm, buf)?;
+            exec(vm, buf)
         }
         Instruction::Extension => {
-            extension(vm, buffer)?;
-            exec(vm, buffer)
+            extension(vm, buf)?;
+            exec(vm, buf)
         }
-
+        Instruction::Section(ctype, _) => {
+            section(vm, buf, ctype)?;
+            exec(vm, buf)
+        }
         Instruction::PushCND => {
-            pushcnd(vm, buffer)?;
-            exec(vm, buffer)
+            pushcnd(vm, buf)?;
+            exec(vm, buf)
         }
         Instruction::PopCursor => {
             popcursor!(vm)?;
-            exec(vm, buffer)
+            exec(vm, buf)
         }
         Instruction::Jmp(ptr) => {
             jmp!(vm, ptr)?;
-            exec(vm, buffer)
+            exec(vm, buf)
         }
         Instruction::JmpRet(ptr) => {
             jmpret!(vm, ptr);
-            exec(vm, buffer)
+            exec(vm, buf)
         }
         Instruction::JmpArrayCND(ptr) => {
             jmpacnd!(vm, ptr)?;
-            exec(vm, buffer)
+            exec(vm, buf)
         }
-        Instruction::JmpVariant(variant, ptr) => {
-            jmpvariant!(vm, variant, U48(ptr as u64))?;
-            exec(vm, buffer)
+        Instruction::JmpVariant(v, p) => {
+            jmpvariant!(vm, v, U48(p as u64))?;
+            exec(vm, buf)
+        }
+        Instruction::Field(name) => {
+            field!(vm, name);
+            exec(vm, buf)
         }
         Instruction::Exit => {
             if exit!(vm)? {
                 Ok(())
             } else {
-                exec(vm, buffer)
+                exec(vm, buf)
             }
-        }
-        Instruction::Section(ctype, _) => {
-            section(vm, buffer, ctype)?;
-            exec(vm, buffer)
-        }
-        Instruction::Field(name) => {
-            field!(vm, name);
-            exec(vm, buffer)
         }
     }
 }
