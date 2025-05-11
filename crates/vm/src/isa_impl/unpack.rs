@@ -1,3 +1,4 @@
+use crate::isa::DataInstruction;
 use crate::utils::numbers::{Float, Integer, Long, U48};
 use crate::{debug_log, exit, field, jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor};
 use crate::{
@@ -10,7 +11,6 @@ use crate::{
 };
 use std::collections::HashMap;
 use tailcall::tailcall;
-use crate::isa::DataInstruction;
 
 macro_rules! vmpushio {
     ($vm:ident, $val:expr) => {{
@@ -387,7 +387,7 @@ pub fn exec(vm: &mut PackVM, buf: &[u8]) -> Result<(), PackerError> {
                 string(vm, buf)?;
                 exec(vm, buf)
             }
-        }
+        },
         Instruction::Optional => {
             optional(vm, buf)?;
             exec(vm, buf)

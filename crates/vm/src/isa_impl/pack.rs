@@ -2,9 +2,15 @@
 
 use tailcall::tailcall;
 
-use crate::{debug_log, exit, field, isa_impl::common::OpResult, jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor, utils::varint::{VarInt32, VarUInt32}, Instruction, PackVM, Value};
 use crate::isa::DataInstruction;
 use crate::utils::numbers::U48;
+use crate::{
+    debug_log, exit, field,
+    isa_impl::common::OpResult,
+    jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor,
+    utils::varint::{VarInt32, VarUInt32},
+    Instruction, PackVM, Value,
+};
 
 macro_rules! vmgetio {
     ($vm:ident) => {{
@@ -172,13 +178,15 @@ fn leb128(vm: &mut PackVM, buf: &mut Vec<u8>, signed: bool) -> OpResult {
     let (raw, len) = if signed {
         VarInt32(
             n.as_i64()
-                .ok_or(packer_error!("Expected a signed int for sleb128"))? as i32
-        ).encode()
+                .ok_or(packer_error!("Expected a signed int for sleb128"))? as i32,
+        )
+        .encode()
     } else {
         VarUInt32(
             n.as_u64()
-                .ok_or(packer_error!("Expected a signed int for sleb128"))? as u32
-        ).encode()
+                .ok_or(packer_error!("Expected a signed int for sleb128"))? as u32,
+        )
+        .encode()
     };
     vmpack!(vm, buf, &raw[..len]);
     vmstep!(vm);
@@ -394,7 +402,7 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
                 string(vm, buf)?;
                 exec(vm, buf)
             }
-        }
+        },
         Instruction::Optional => {
             optional(vm, buf)?;
             exec(vm, buf)

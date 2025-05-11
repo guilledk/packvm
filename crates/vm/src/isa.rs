@@ -285,9 +285,9 @@ pub enum DataInstruction {
     Int(u8),
     Leb128(bool),
     Float(u8),
-    Bytes, // bytes with LEB128 encoded size first
-    BytesRaw (U48), // raw bytes, if param is > 0 do size check on stack value
-    String, // utf-8 string with LEB128 encoded len
+    Bytes,         // bytes with LEB128 encoded size first
+    BytesRaw(U48), // raw bytes, if param is > 0 do size check on stack value
+    String,        // utf-8 string with LEB128 encoded len
 }
 
 #[repr(u8)]
@@ -329,7 +329,7 @@ pub enum Instruction {
     /// structure marks
     // indicates a new program section
     Section(
-        u8,    // struct type: 1 = enum, 2 = struct
+        u8,  // struct type: 1 = enum, 2 = struct
         U48, // program id
     ),
     Field(U48), // indicate field name string id for next value
@@ -370,30 +370,8 @@ impl Instruction {
 }
 
 pub const STD_TYPES: [&str; 18] = [
-    "bool",
-
-    "u8",
-    "u16",
-    "u32",
-    "u64",
-    "u128",
-
-    "i8",
-    "i16",
-    "i32",
-    "i64",
-    "i128",
-
-    "uleb128",
-    "sleb128",
-
-    "f32",
-    "f64",
-
-    "bytes",
-    "str",
-
-    "raw",
+    "bool", "u8", "u16", "u32", "u64", "u128", "i8", "i16", "i32", "i64", "i128", "uleb128",
+    "sleb128", "f32", "f64", "bytes", "str", "raw",
 ];
 
 #[macro_export]
@@ -440,10 +418,13 @@ macro_rules! instruction_for {
 
             _ => {
                 if $ty.starts_with("raw(") {
-                    let size = U48::from($ty.split('(').nth(1)
-                        .and_then(|s| s.split(')').next())
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or_default());
+                    let size = U48::from(
+                        $ty.split('(')
+                            .nth(1)
+                            .and_then(|s| s.split(')').next())
+                            .and_then(|s| s.parse::<u64>().ok())
+                            .unwrap_or_default(),
+                    );
 
                     Some(DataInstruction::BytesRaw(size))
                 } else {

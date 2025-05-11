@@ -1,5 +1,8 @@
 use std::fmt;
-use std::ops::{Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign, Mul, MulAssign, Not, Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign};
+use std::ops::{
+    Add, AddAssign, BitAnd, BitAndAssign, BitOr, BitOrAssign, BitXor, BitXorAssign, Div, DivAssign,
+    Mul, MulAssign, Not, Rem, RemAssign, Shl, ShlAssign, Shr, ShrAssign, Sub, SubAssign,
+};
 
 /// Unsigned 48-bit integer kept in the low 48 bits of a `u64`.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -8,11 +11,10 @@ pub struct U48(pub u64);
 
 const MASK: u64 = 0xFFFF_FFFF_FFFF;
 
-
 impl From<u64> for U48 {
     #[inline(always)]
     fn from(value: u64) -> Self {
-        U48(value & MASK)  // truncates the upper 16 bits
+        U48(value & MASK) // truncates the upper 16 bits
     }
 }
 
@@ -26,14 +28,12 @@ impl From<usize> for U48 {
 impl From<&[u8; 6]> for U48 {
     #[inline(always)]
     fn from(b: &[u8; 6]) -> Self {
-        U48(
-            (b[0] as u64)
-                | (b[1] as u64) <<  8
-                | (b[2] as u64) << 16
-                | (b[3] as u64) << 24
-                | (b[4] as u64) << 32
-                | (b[5] as u64) << 40,
-        )
+        U48((b[0] as u64)
+            | (b[1] as u64) << 8
+            | (b[2] as u64) << 16
+            | (b[3] as u64) << 24
+            | (b[4] as u64) << 32
+            | (b[5] as u64) << 40)
     }
 }
 
@@ -43,7 +43,7 @@ impl From<U48> for [u8; 6] {
         let n = v.0 & MASK;
         [
             n as u8,
-            (n >>  8) as u8,
+            (n >> 8) as u8,
             (n >> 16) as u8,
             (n >> 24) as u8,
             (n >> 32) as u8,
@@ -338,7 +338,11 @@ impl Float {
             FloatPriv::F32(v) => Some(v),
             FloatPriv::F64(v) => {
                 let v32 = v as f32;
-                if (v32 as f64) == v { Some(v32) } else { None }
+                if (v32 as f64) == v {
+                    Some(v32)
+                } else {
+                    None
+                }
             }
         }
     }
@@ -362,13 +366,17 @@ impl fmt::Display for Float {
 impl From<f32> for Float {
     #[inline]
     fn from(n: f32) -> Self {
-        Self { n: FloatPriv::F32(n) }
+        Self {
+            n: FloatPriv::F32(n),
+        }
     }
 }
 
 impl From<f64> for Float {
     #[inline]
     fn from(n: f64) -> Self {
-        Self { n: FloatPriv::F64(n) }
+        Self {
+            n: FloatPriv::F64(n),
+        }
     }
 }

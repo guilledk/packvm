@@ -42,15 +42,13 @@
         built_in_types.emplace("extended_asset",            pack_unpack<extended_asset>());
     }
 */
-use std::collections::HashMap;
-use antelope::{
-    chain::{
-        abi::{ABIResolvedType, ABITypeResolver, ABIView, AbiField, AbiStruct, AbiTypeDef, AbiVariant, ShipABI, ABI},
-        asset::{Asset, Symbol, SymbolCode},
-        binary_extension::BinaryExtension,
-        name::Name
-    },
-    serializer::{Encoder, Packer}
+use crate::utils::numbers::Integer;
+use crate::{
+    compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef},
+    is_std_type,
+    isa::STD_TYPES,
+    utils::TypeCompileError,
+    Value,
 };
 use antelope::chain::action::PermissionLevel;
 use antelope::chain::authority::{Authority, KeyWeight, PermissionLevelWeight, WaitWeight};
@@ -58,8 +56,19 @@ use antelope::chain::checksum::{Checksum160, Checksum256, Checksum512};
 use antelope::chain::key_type::{KeyType, KeyTypeTrait};
 use antelope::chain::public_key::PublicKey;
 use antelope::chain::signature::Signature;
-use crate::{compiler::{EnumDef, SourceCode, StructDef, TypeAlias, TypeDef}, utils::TypeCompileError, isa::STD_TYPES, Value, is_std_type};
-use crate::utils::numbers::Integer;
+use antelope::{
+    chain::{
+        abi::{
+            ABIResolvedType, ABITypeResolver, ABIView, AbiField, AbiStruct, AbiTypeDef, AbiVariant,
+            ShipABI, ABI,
+        },
+        asset::{Asset, Symbol, SymbolCode},
+        binary_extension::BinaryExtension,
+        name::Name,
+    },
+    serializer::{Encoder, Packer},
+};
+use std::collections::HashMap;
 
 impl TypeAlias for AbiTypeDef {
     fn new_type_name(&self) -> &str {
@@ -123,20 +132,19 @@ impl Default for AntelopeSourceCode {
 
 fn expand_struct_base<ABI: ABIView>(abi: &ABI, s: &mut AbiStruct) -> Result<(), TypeCompileError> {
     if s.base != "" {
-        let (resolved_type, _) = abi.resolve_type(&s.base)
-            .ok_or(
-                TypeCompileError::new(
-                    format_args!("Couldn\'t resolve type for struct {} base {}", s.name, s.base)))?;
+        let (resolved_type, _) =
+            abi.resolve_type(&s.base)
+                .ok_or(TypeCompileError::new(format_args!(
+                    "Couldn\'t resolve type for struct {} base {}",
+                    s.name, s.base
+                )))?;
 
         let base_fields = match resolved_type {
-            ABIResolvedType::Struct(struct_meta) => {
-                Ok(struct_meta.fields.clone())
-            }
-            _ => {
-                Err(TypeCompileError::new(
-                    format_args!("Expected base field type to be a struct but got {:?}", resolved_type)
-                ))
-            }
+            ABIResolvedType::Struct(struct_meta) => Ok(struct_meta.fields.clone()),
+            _ => Err(TypeCompileError::new(format_args!(
+                "Expected base field type to be a struct but got {:?}",
+                resolved_type
+            ))),
         }?;
 
         let mut fields = Vec::with_capacity(base_fields.len() + s.fields().len());
@@ -155,70 +163,74 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<Ab
         ("uint32", "u32"),
         ("uint64", "u64"),
         ("uint128", "u128"),
-
         ("int8", "i8"),
         ("int16", "i16"),
         ("int32", "i32"),
         ("int64", "i64"),
         ("int128", "i128"),
-
         ("varuint32", "uleb128"),
         ("varint32", "sleb128"),
-
         ("float32", "f32"),
         ("float64", "f64"),
         ("float128", "raw(16)"),
-
         ("string", "str"),
-
         ("name", "u64"),
         ("account_name", "u64"),
-
         ("symbol", "u64"),
         ("symbol_code", "u64"),
-
         ("rd160", "raw(20)"),
         ("checksum160", "raw(20)"),
-
         ("sha256", "raw(32)"),
         ("checksum256", "raw(32)"),
         ("transaction_id", "raw(32)"),
-
         ("checksum512", "raw(64)"),
-
         ("time_point", "u64"),
         ("time_point_sec", "u32"),
         ("block_timestamp_type", "u32"),
-
         ("public_key", "raw(34)"),
         ("signature", "raw(66)"),
-
-    ].iter().rev() {
-        aliases.insert(0, AbiTypeDef {
-            new_type_name: new_type.to_string(),
-            r#type: alias_type.to_string()
-        });
+    ]
+    .iter()
+    .rev()
+    {
+        aliases.insert(
+            0,
+            AbiTypeDef {
+                new_type_name: new_type.to_string(),
+                r#type: alias_type.to_string(),
+            },
+        );
     }
 
     let extra_structs = [
-        AbiStruct{
+        AbiStruct {
             name: "asset".to_string(),
             base: String::default(),
             fields: vec![
-                AbiField {name: "amount".to_string(), r#type: "i64".to_string()},
-                AbiField {name: "symbol".to_string(), r#type: "u64".to_string()},
-            ]
+                AbiField {
+                    name: "amount".to_string(),
+                    r#type: "i64".to_string(),
+                },
+                AbiField {
+                    name: "symbol".to_string(),
+                    r#type: "u64".to_string(),
+                },
+            ],
         },
-
-        AbiStruct{
+        AbiStruct {
             name: "extended_asset".to_string(),
             base: String::default(),
             fields: vec![
-                AbiField {name: "quantity".to_string(), r#type: "asset".to_string()},
-                AbiField {name: "contract".to_string(), r#type: "name".to_string()},
-            ]
+                AbiField {
+                    name: "quantity".to_string(),
+                    r#type: "asset".to_string(),
+                },
+                AbiField {
+                    name: "contract".to_string(),
+                    r#type: "name".to_string(),
+                },
+            ],
         },
-
         // AbiStruct{
         //     name: "signature".to_string(),
         //     base: String::default(),
@@ -272,12 +284,7 @@ macro_rules! impl_try_from_abi {
 
 impl_try_from_abi!(ABI, ShipABI => AntelopeSourceCode);
 
-impl SourceCode<
-    AbiTypeDef,
-    AbiField,
-    AbiVariant,
-    AbiStruct
-> for AntelopeSourceCode {
+impl SourceCode<AbiTypeDef, AbiField, AbiVariant, AbiStruct> for AntelopeSourceCode {
     fn structs(&self) -> &[AbiStruct] {
         self.structs.as_slice()
     }
@@ -300,13 +307,14 @@ impl SourceCode<
     fn is_std_type(&self, ty: &str) -> bool {
         let ty = match self.resolve_alias(ty) {
             Some(ty) => ty,
-            None => ty.to_string()
+            None => ty.to_string(),
         };
         is_std_type!(&ty.as_str())
     }
 
     fn is_alias_of(&self, alias: &str, ty: &str) -> bool {
-        self.aliases.iter()
+        self.aliases
+            .iter()
             .any(|a| a.new_type_name == alias && a.r#type == ty)
     }
 
@@ -315,10 +323,9 @@ impl SourceCode<
     }
 
     fn is_variant_of(&self, ty: &str, var: &str) -> bool {
-        match self.enums.iter()
-            .find(|e| e.name == var) {
+        match self.enums.iter().find(|e| e.name == var) {
             Some(variant) => variant.types.contains(&ty.to_string()),
-            None => false
+            None => false,
         }
     }
 }
@@ -337,12 +344,10 @@ impl From<Symbol> for Value {
 
 impl From<Asset> for Value {
     fn from(value: Asset) -> Self {
-        Value::Struct(HashMap::from(
-            [
-                ("amount".to_string(), value.amount().into()),
-                ("symbol".to_string(), value.symbol().into()),
-            ]
-        ))
+        Value::Struct(HashMap::from([
+            ("amount".to_string(), value.amount().into()),
+            ("symbol".to_string(), value.symbol().into()),
+        ]))
     }
 }
 
@@ -362,12 +367,13 @@ impl From<ABI> for Value {
 
 impl<T> From<BinaryExtension<T>> for Value
 where
-    T: Packer + Default, for<'a> Value: From<&'a T>,
+    T: Packer + Default,
+    for<'a> Value: From<&'a T>,
 {
     fn from(value: BinaryExtension<T>) -> Value {
         match value.value() {
             Some(v) => v.into(),
-            None    => Value::None,
+            None => Value::None,
         }
     }
 }
@@ -376,7 +382,7 @@ impl From<BinaryExtension<u128>> for Value {
     fn from(value: BinaryExtension<u128>) -> Value {
         match value.value() {
             Some(v) => v.clone().into(),
-            None    => Value::None,
+            None => Value::None,
         }
     }
 }
@@ -455,7 +461,10 @@ impl From<Vec<PermissionLevelWeight>> for Value {
 impl From<Authority> for Value {
     fn from(value: Authority) -> Self {
         Value::Struct(HashMap::from([
-            ("threshold".to_string(), Value::Int(Integer::from(value.threshold))),
+            (
+                "threshold".to_string(),
+                Value::Int(Integer::from(value.threshold)),
+            ),
             ("keys".to_string(), value.keys.into()),
             ("accounts".to_string(), value.accounts.into()),
             ("waits".to_string(), value.waits.into()),
@@ -466,8 +475,14 @@ impl From<Authority> for Value {
 impl From<WaitWeight> for Value {
     fn from(value: WaitWeight) -> Self {
         Value::Struct(HashMap::from([
-            ("wait_sec".to_string(), Value::Int(Integer::from(value.wait_sec))),
-            ("weight".to_string(), Value::Int(Integer::from(value.weight))),
+            (
+                "wait_sec".to_string(),
+                Value::Int(Integer::from(value.wait_sec)),
+            ),
+            (
+                "weight".to_string(),
+                Value::Int(Integer::from(value.weight)),
+            ),
         ]))
     }
 }

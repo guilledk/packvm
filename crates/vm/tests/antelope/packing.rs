@@ -1,21 +1,22 @@
-use serde::Serialize;
-use serde_json::from_str;
-use antelope::{chain::{
-    abi::{ABI},
-    binary_extension::BinaryExtension,
-}, name, serializer::{Encoder, Decoder, Packer, PackerError}, EnumPacker, StructPacker};
 use antelope::chain::abi::ShipABI;
 use antelope::chain::authority::{Authority, KeyWeight};
 use antelope::chain::name::Name;
 use antelope::chain::public_key::PublicKey;
-use packvm::{PackVM, Value, Instruction, compiler::{
-    compile_type,
-    SourceCode,
-    ProgramNamespace,
-    antelope::AntelopeSourceCode,
-}, compile_source, assemble, run_pack};
+use antelope::{
+    chain::{abi::ABI, binary_extension::BinaryExtension},
+    name,
+    serializer::{Decoder, Encoder, Packer, PackerError},
+    EnumPacker, StructPacker,
+};
 use packvm::utils::numbers::{Float, Integer, Long};
-use packvm_macros::{VMStruct, VMEnum};
+use packvm::{
+    assemble, compile_source,
+    compiler::{antelope::AntelopeSourceCode, compile_type, ProgramNamespace, SourceCode},
+    run_pack, Instruction, PackVM, Value,
+};
+use packvm_macros::{VMEnum, VMStruct};
+use serde::Serialize;
+use serde_json::from_str;
 
 const TESTABI: &str = include_str!("test_abi.json");
 
@@ -31,8 +32,7 @@ macro_rules! pack_and_assert {
         let mut program = Default::default();
 
         // do the equivalent of compile_program
-        compile_type(&src, $type_name, &mut program)
-            .unwrap_or_else(|e| panic!("{}", e.reason));
+        compile_type(&src, $type_name, &mut program).unwrap_or_else(|e| panic!("{}", e.reason));
         program.code.push(Instruction::Exit);
 
         ns.set_program(program.clone());
@@ -49,39 +49,78 @@ macro_rules! pack_and_assert {
 
 #[test]
 fn test_pack_bool() {
-    pack_and_assert!("bool", &Value::Bool(true),  &[1u8]);
+    pack_and_assert!("bool", &Value::Bool(true), &[1u8]);
     pack_and_assert!("bool", &Value::Bool(false), &[0u8]);
 }
 
 #[test]
 fn test_pack_uints() {
-    pack_and_assert!("uint8",   &Value::Int(Integer::from(0x12u8)),                     &[0x12]);
-    pack_and_assert!("uint16",  &Value::Int(Integer::from(0x1234u16)),                  &[0x34, 0x12]);
-    pack_and_assert!("uint32",  &Value::Int(Integer::from(0x12345678u32)),              &[0x78, 0x56, 0x34, 0x12]);
-    pack_and_assert!("uint64",  &Value::Int(Integer::from(0x1234567890abcdefu64)),      &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12]);
-    pack_and_assert!("uint128", &Value::Long(Long::from(0x112233445566778899aabbccddeeff00u128)),
-                     &0x112233445566778899aabbccddeeff00u128.to_le_bytes());
+    pack_and_assert!("uint8", &Value::Int(Integer::from(0x12u8)), &[0x12]);
+    pack_and_assert!(
+        "uint16",
+        &Value::Int(Integer::from(0x1234u16)),
+        &[0x34, 0x12]
+    );
+    pack_and_assert!(
+        "uint32",
+        &Value::Int(Integer::from(0x12345678u32)),
+        &[0x78, 0x56, 0x34, 0x12]
+    );
+    pack_and_assert!(
+        "uint64",
+        &Value::Int(Integer::from(0x1234567890abcdefu64)),
+        &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12]
+    );
+    pack_and_assert!(
+        "uint128",
+        &Value::Long(Long::from(0x112233445566778899aabbccddeeff00u128)),
+        &0x112233445566778899aabbccddeeff00u128.to_le_bytes()
+    );
 }
 
 #[test]
 fn test_pack_ints() {
-    pack_and_assert!("int8",   &Value::Int(Integer::from(-1i8)),   &[0xff]);
-    pack_and_assert!("int16",  &Value::Int(Integer::from(-2i16)),  &[0xfe, 0xff]);
-    pack_and_assert!("int32",  &Value::Int(Integer::from(-3i32)),  &[0xfd, 0xff, 0xff, 0xff]);
-    pack_and_assert!("int64",  &Value::Int(Integer::from(-4i64)),  &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]);
-    pack_and_assert!("int128", &Value::Long(Long::from(-5i128)),   &(-5i128).to_le_bytes());
+    pack_and_assert!("int8", &Value::Int(Integer::from(-1i8)), &[0xff]);
+    pack_and_assert!("int16", &Value::Int(Integer::from(-2i16)), &[0xfe, 0xff]);
+    pack_and_assert!(
+        "int32",
+        &Value::Int(Integer::from(-3i32)),
+        &[0xfd, 0xff, 0xff, 0xff]
+    );
+    pack_and_assert!(
+        "int64",
+        &Value::Int(Integer::from(-4i64)),
+        &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff]
+    );
+    pack_and_assert!(
+        "int128",
+        &Value::Long(Long::from(-5i128)),
+        &(-5i128).to_le_bytes()
+    );
 }
 
 #[test]
 fn test_pack_varuint32() {
     pack_and_assert!("varuint32", &Value::Int(Integer::from(0x7Fu32)), &[0x7F]);
-    pack_and_assert!("varuint32", &Value::Int(Integer::from(0x80u32)), &[0x80, 0x01]);
+    pack_and_assert!(
+        "varuint32",
+        &Value::Int(Integer::from(0x80u32)),
+        &[0x80, 0x01]
+    );
 }
 
 #[test]
 fn test_pack_floats() {
-    pack_and_assert!("float32", &Value::Float(Float::from(1.0f32)), &1.0f32.to_le_bytes());
-    pack_and_assert!("float64", &Value::Float(Float::from(2.0f64)), &2.0f64.to_le_bytes());
+    pack_and_assert!(
+        "float32",
+        &Value::Float(Float::from(1.0f32)),
+        &1.0f32.to_le_bytes()
+    );
+    pack_and_assert!(
+        "float64",
+        &Value::Float(Float::from(2.0f64)),
+        &2.0f64.to_le_bytes()
+    );
     pack_and_assert!("float128", &Value::Bytes([1u8; 16].to_vec()), &[1u8; 16]);
 }
 
@@ -202,7 +241,9 @@ fn test_pack_struct() {
             "fourth".to_string(),
         ],
         field5: Some(vec![1, 2, 3, 4, 5]),
-        field6: TestEnum::Type2(TestStructV2 {field: "type2".to_string()}),
+        field6: TestEnum::Type2(TestStructV2 {
+            field: "type2".to_string(),
+        }),
         field7: false,
         field8: 69,
         field9: 69,
@@ -222,7 +263,9 @@ fn test_pack_struct() {
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let pid = src.program_id_for("test_struct").expect("failed to get program");
+    let pid = src
+        .program_id_for("test_struct")
+        .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
     let encoded = run_pack!(vm, pid, &val);
@@ -233,7 +276,6 @@ const STDABI: &str = include_str!("std_abi.json");
 
 #[test]
 fn test_pack_get_status_request_v0() {
-
     #[derive(Default, Serialize, PartialEq, Debug, VMStruct)]
     #[vm_name = "get_status_request_v0"]
     struct GetStatusRequestV0;
@@ -268,7 +310,9 @@ fn test_pack_get_status_request_v0() {
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let pid = src.program_id_for("request").expect("failed to get program");
+    let pid = src
+        .program_id_for("request")
+        .expect("failed to get program");
     let mut vm = PackVM::from_executable(code);
     let encoded = run_pack!(vm, pid, &input);
 
@@ -279,13 +323,12 @@ const EOSIOABI: &str = include_str!("eosio.system.json");
 
 #[test]
 fn test_pack_newaccount() {
-
     #[derive(Clone, Default, Serialize, PartialEq, Debug, StructPacker, VMStruct)]
     struct NewAccountParams {
         creator: Name,
         name: Name,
         owner: Authority,
-        active: Authority
+        active: Authority,
     }
 
     let mut encoder = Encoder::new(0);
@@ -294,26 +337,28 @@ fn test_pack_newaccount() {
         name: name!("testaccount"),
         owner: Authority {
             threshold: 1,
-            keys: vec![
-                KeyWeight {
-                    key: PublicKey::new_from_str("PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm").unwrap(),
-                    weight: 1,
-                }
-            ],
+            keys: vec![KeyWeight {
+                key: PublicKey::new_from_str(
+                    "PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm",
+                )
+                .unwrap(),
+                weight: 1,
+            }],
             accounts: vec![],
             waits: vec![],
         },
         active: Authority {
             threshold: 1,
-            keys: vec![
-                KeyWeight {
-                    key: PublicKey::new_from_str("PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm").unwrap(),
-                    weight: 1,
-                }
-            ],
+            keys: vec![KeyWeight {
+                key: PublicKey::new_from_str(
+                    "PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm",
+                )
+                .unwrap(),
+                weight: 1,
+            }],
             accounts: vec![],
             waits: vec![],
-        }
+        },
     };
     let value: Value = params.clone().into();
     params.pack(&mut encoder);
@@ -324,7 +369,9 @@ fn test_pack_newaccount() {
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let pid = src.program_id_for("newaccount").expect("failed to get program");
+    let pid = src
+        .program_id_for("newaccount")
+        .expect("failed to get program");
     let mut vm = PackVM::from_executable(code);
     let encoded = run_pack!(vm, pid, &value);
 

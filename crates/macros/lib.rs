@@ -13,12 +13,16 @@ fn vm_name_attr(attrs: &[Attribute], default: &str) -> LitStr {
         if attr.path.is_ident("vm_name") {
             match attr.parse_meta() {
                 Ok(Meta::NameValue(MetaNameValue {
-                                       lit: Lit::Str(lit), ..
-                                   })) => return lit,
+                    lit: Lit::Str(lit), ..
+                })) => return lit,
                 _ => {
                     let msg = "`vm_name` must be of the form #[vm_name = \"…\"]";
-                    proc_macro::Diagnostic::spanned(attr.span().unwrap(), proc_macro::Level::Error, msg)
-                        .emit();
+                    proc_macro::Diagnostic::spanned(
+                        attr.span().unwrap(),
+                        proc_macro::Level::Error,
+                        msg,
+                    )
+                    .emit();
                 }
             }
         }
@@ -118,5 +122,5 @@ pub fn vm_enum(input: TokenStream) -> TokenStream {
             }
         }
     }
-        .into()
+    .into()
 }

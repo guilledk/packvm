@@ -7,11 +7,11 @@ impl VarUInt32 {
     #[inline(always)]
     pub const fn encoded_len(self) -> usize {
         match self.0 {
-            0..=0x7F                 => 1,
-            0x80..=0x3FFF            => 2,
-            0x4000..=0x1F_FFFF       => 3,
-            0x20_0000..=0xFFF_FFFF   => 4,
-            _                        => 5,
+            0..=0x7F => 1,
+            0x80..=0x3FFF => 2,
+            0x4000..=0x1F_FFFF => 3,
+            0x20_0000..=0xFFF_FFFF => 4,
+            _ => 5,
         }
     }
 
@@ -26,7 +26,9 @@ impl VarUInt32 {
             v >>= 7;
             buf[i] = if v == 0 { byte } else { byte | 0x80 };
             i += 1;
-            if v == 0 { break }
+            if v == 0 {
+                break;
+            }
         }
         (buf, i)
     }
@@ -37,16 +39,28 @@ impl VarUInt32 {
         let mut shift = 0;
         for (i, &b) in bytes.iter().enumerate() {
             result |= ((b & 0x7F) as u32) << shift;
-            if (b & 0x80) == 0 { return Ok((VarUInt32(result), i + 1)) }
+            if (b & 0x80) == 0 {
+                return Ok((VarUInt32(result), i + 1));
+            }
             shift += 7;
-            if shift >= 32 { return Err("ULEB128 overflow") }
+            if shift >= 32 {
+                return Err("ULEB128 overflow");
+            }
         }
         Err("buffer too short")
     }
 }
 
-impl From<u32> for VarUInt32         { fn from(v: u32) -> Self { Self(v) } }
-impl From<VarUInt32> for u32         { fn from(v: VarUInt32) -> Self { v.0 } }
+impl From<u32> for VarUInt32 {
+    fn from(v: u32) -> Self {
+        Self(v)
+    }
+}
+impl From<VarUInt32> for u32 {
+    fn from(v: VarUInt32) -> Self {
+        v.0
+    }
+}
 
 /// Signed two-complement LEB128 (not zig-zag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,9 +76,10 @@ impl VarInt32 {
             let byte = value & 0x7F;
             value >>= 7;
             len += 1;
-            let done = (value == 0   && (byte & 0x40) == 0) ||
-                (value == -1  && (byte & 0x40) != 0);
-            if done { return len }
+            let done = (value == 0 && (byte & 0x40) == 0) || (value == -1 && (byte & 0x40) != 0);
+            if done {
+                return len;
+            }
         }
     }
 
@@ -77,11 +92,12 @@ impl VarInt32 {
         loop {
             let byte = (v & 0x7F) as u8;
             v >>= 7;
-            let more = !((v == 0 && (byte & 0x40) == 0) ||
-                (v == -1 && (byte & 0x40) != 0));
+            let more = !((v == 0 && (byte & 0x40) == 0) || (v == -1 && (byte & 0x40) != 0));
             buf[i] = if more { byte | 0x80 } else { byte };
             i += 1;
-            if !more { break }
+            if !more {
+                break;
+            }
         }
         (buf, i)
     }
@@ -96,22 +112,32 @@ impl VarInt32 {
             shift += 7;
             if (b & 0x80) == 0 {
                 if shift < 32 && (byte_read & 0x40) != 0 {
-                    result |= (!0) << shift;          // sign-extend
+                    result |= (!0) << shift; // sign-extend
                 }
                 return Ok((VarInt32(result), i + 1));
             }
-            if shift >= 32 { return Err("SLEB128 overflow") }
+            if shift >= 32 {
+                return Err("SLEB128 overflow");
+            }
         }
         Err("buffer too short")
     }
 }
 
-impl From<i32> for VarInt32          { fn from(v: i32) -> Self { Self(v) } }
-impl From<VarInt32> for i32          { fn from(v: VarInt32) -> Self { v.0 } }
+impl From<i32> for VarInt32 {
+    fn from(v: i32) -> Self {
+        Self(v)
+    }
+}
+impl From<VarInt32> for i32 {
+    fn from(v: VarInt32) -> Self {
+        v.0
+    }
+}
 
 #[cfg(test)]
 mod tests {
-    use super::{VarUInt32, VarInt32};
+    use super::{VarInt32, VarUInt32};
 
     // ---------- helpers ----------
 
@@ -161,14 +187,14 @@ mod tests {
         const CASES: &[u32] = &[
             0,
             1,
-            127,        // 1-byte upper bound
+            127, // 1-byte upper bound
             128,
-            16_383,     // 2-byte upper bound
+            16_383, // 2-byte upper bound
             16_384,
-            0x1F_FFFF,  // 3-byte upper bound
+            0x1F_FFFF, // 3-byte upper bound
             0x20_0000,
-            0x0FFF_FFFF,// 4-byte upper bound
-            u32::MAX,   // 0xFFFF_FFFF -> 5 bytes
+            0x0FFF_FFFF, // 4-byte upper bound
+            u32::MAX,    // 0xFFFF_FFFF -> 5 bytes
         ];
         for &v in CASES {
             roundtrip_u(v);
@@ -183,8 +209,10 @@ mod tests {
             0,
             1,
             -1,
-            63,   64,   // sign-bit boundary
-            -64,  -65,
+            63,
+            64, // sign-bit boundary
+            -64,
+            -65,
             i32::MAX,
             i32::MIN,
         ];

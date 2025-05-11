@@ -3,40 +3,31 @@ pub mod assembly;
 
 pub use assembly::assemble;
 
+use crate::compiler_error;
+use crate::isa::{DataInstruction, Instruction, STD_TYPES};
+use crate::utils::numbers::U48;
+use crate::utils::TypeCompileError;
+use crate::{debug_log, instruction_for};
+use bimap::BiHashMap;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::marker::PhantomData;
-use bimap::BiHashMap;
-use crate::{debug_log, instruction_for};
-use crate::isa::{DataInstruction, Instruction, STD_TYPES};
-use crate::compiler_error;
-use crate::utils::{TypeCompileError};
-use crate::utils::numbers::U48;
 
 #[inline(always)]
-pub fn ok_or_panic<T, E: Error>(maybe_err: Result<T, E>) -> T {{
-    maybe_err
-        .unwrap_or_else(
-            |e| panic!("Compiler error:\n\t{}", e.to_string())
-        )
-}}
+pub fn ok_or_panic<T, E: Error>(maybe_err: Result<T, E>) -> T {
+    {
+        maybe_err.unwrap_or_else(|e| panic!("Compiler error:\n\t{}", e.to_string()))
+    }
+}
 
 #[inline(always)]
-pub fn ok_or_raise<
-    Args: fmt::Display,
-    T,
-    E: Error
->(maybe_err: Result<T, E>, args: Args) -> Result<T, TypeCompileError> {
-    maybe_err
-        .map_err(
-            |e| compiler_error!(
-                "{}:\n\t{}",
-                format!("{}", args),
-                e.to_string()
-            )
-        )
+pub fn ok_or_raise<Args: fmt::Display, T, E: Error>(
+    maybe_err: Result<T, E>,
+    args: Args,
+) -> Result<T, TypeCompileError> {
+    maybe_err.map_err(|e| compiler_error!("{}:\n\t{}", format!("{}", args), e.to_string()))
 }
 
 #[macro_export]
@@ -46,9 +37,11 @@ macro_rules! compile {
     }};
     ($src:expr, $pid:expr, $name:expr) => {{
         let mut ns = ::packvm::compiler::ProgramNamespace::default();
-        ::packvm::compiler::ok_or_panic(
-            ::packvm::compiler::compile_program($src, $name.to_string(), &mut ns)
-        );
+        ::packvm::compiler::ok_or_panic(::packvm::compiler::compile_program(
+            $src,
+            $name.to_string(),
+            &mut ns,
+        ));
         ns.get_program($name).unwrap().clone()
     }};
 }
@@ -56,10 +49,8 @@ macro_rules! compile {
 #[macro_export]
 macro_rules! compile_source {
     ($src:ident) => {
-        ::packvm::compiler::ok_or_panic(
-            ::packvm::compiler::compile_source(&$src)
-        )
-    }
+        ::packvm::compiler::ok_or_panic(::packvm::compiler::compile_source(&$src))
+    };
 }
 
 #[macro_export]
@@ -87,21 +78,14 @@ pub trait EnumDef {
     fn variants(&self) -> &[String];
 }
 
-pub trait StructDef<
-    T: TypeDef
-> {
+pub trait StructDef<T: TypeDef> {
     fn name(&self) -> &str;
     fn fields(&self) -> &[T];
 }
 
 pub const RESERVED_IDS: usize = 1 + STD_TYPES.len();
 
-pub trait SourceCode<
-    Alias: TypeAlias,
-    Type: TypeDef,
-    Enum: EnumDef,
-    Struct: StructDef<Type>,
-> {
+pub trait SourceCode<Alias: TypeAlias, Type: TypeDef, Enum: EnumDef, Struct: StructDef<Type>> {
     fn structs(&self) -> &[Struct];
     fn enums(&self) -> &[Enum];
     fn aliases(&self) -> &[Alias];
@@ -148,13 +132,13 @@ impl Program {
 
 impl Default for Program {
     fn default() -> Self {
-       Self {
-           id: U48::from(RESERVED_IDS),
-           name: Default::default(),
-           code: Default::default(),
-           deps: Default::default(),
-           strings: Default::default(),
-       }
+        Self {
+            id: U48::from(RESERVED_IDS),
+            name: Default::default(),
+            code: Default::default(),
+            deps: Default::default(),
+            strings: Default::default(),
+        }
     }
 }
 
@@ -164,7 +148,7 @@ pub struct ProgramNamespace<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug,
 > {
     src: Source,
     ns: HashMap<U48, Program>,
@@ -173,12 +157,13 @@ pub struct ProgramNamespace<
 }
 
 impl<
-    A: TypeAlias,
-    T: TypeDef,
-    E: EnumDef,
-    S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
-> ProgramNamespace<A, T, E, S, Source> {
+        A: TypeAlias,
+        T: TypeDef,
+        E: EnumDef,
+        S: StructDef<T>,
+        Source: SourceCode<A, T, E, S> + Clone + Default + Debug,
+    > ProgramNamespace<A, T, E, S, Source>
+{
     pub fn from_source(src: &Source) -> Self {
         Self {
             src: src.clone(),
@@ -200,17 +185,17 @@ impl<
     }
 
     pub fn get_program_or_init(&mut self, name: &str) -> Result<&mut Program, TypeCompileError> {
-        let id = self.src.program_id_for(name)
+        let id = self
+            .src
+            .program_id_for(name)
             .ok_or(compiler_error!("Program \"{}\" unknown", name))?;
 
-        Ok(self.ns.entry(id).or_insert_with(|| {
-            Program {
-                id,
-                name: name.to_string(),
-                code: Vec::new(),
-                deps: HashSet::new(),
-                strings: Vec::new(),
-            }
+        Ok(self.ns.entry(id).or_insert_with(|| Program {
+            id,
+            name: name.to_string(),
+            code: Vec::new(),
+            deps: HashSet::new(),
+            strings: Vec::new(),
         }))
     }
 
@@ -228,7 +213,8 @@ impl<
         // insert reserved strings
         self.strings.insert(U48(0), "__reserved".to_string());
         for i in 1..RESERVED_IDS {
-            self.strings.insert(U48::from(i), format!("__reserved_{}", STD_TYPES[i-1]));
+            self.strings
+                .insert(U48::from(i), format!("__reserved_{}", STD_TYPES[i - 1]));
         }
 
         let mut field_id = U48::from(self.len() + RESERVED_IDS).into();
@@ -244,7 +230,9 @@ impl<
         }
         #[cfg(feature = "debug")]
         {
-            let mut strings = self.strings.iter()
+            let mut strings = self
+                .strings
+                .iter()
                 .map(|(id, s)| (*id, s.clone()))
                 .collect::<Vec<(U48, String)>>();
             strings.sort();
@@ -258,18 +246,21 @@ impl<
 }
 
 impl<
-    'a,
-    A: TypeAlias,
-    T: TypeDef,
-    E: EnumDef,
-    S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
-> IntoIterator for &'a ProgramNamespace<A, T, E, S, Source> {
+        'a,
+        A: TypeAlias,
+        T: TypeDef,
+        E: EnumDef,
+        S: StructDef<T>,
+        Source: SourceCode<A, T, E, S> + Clone + Default + Debug,
+    > IntoIterator for &'a ProgramNamespace<A, T, E, S, Source>
+{
     type Item = &'a Program;
     type IntoIter = std::vec::IntoIter<&'a Program>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let mut programs = self.ns.iter()
+        let mut programs = self
+            .ns
+            .iter()
             .map(|(_name, prog)| prog)
             .collect::<Vec<&Program>>();
         programs.sort_by(|a, b| a.id.cmp(&b.id));
@@ -314,13 +305,9 @@ pub fn compile_type_ops<
 >(
     src: &Source,
     type_name: &str,
-    depth: usize
+    depth: usize,
 ) -> Result<Instruction, TypeCompileError> {
-    debug_log!(
-        "{}Compile type ops for: {}",
-        "\t".repeat(depth),
-        type_name
-    );
+    debug_log!("{}Compile type ops for: {}", "\t".repeat(depth), type_name);
 
     let type_name = match src.resolve_alias(type_name) {
         Some(t) => t,
@@ -331,17 +318,27 @@ pub fn compile_type_ops<
         return Ok(Instruction::IO(std_op));
     }
 
-    if src.enums().iter().find(|v| v.name() == type_name).is_some() ||
-        src.structs().iter().find(|s| s.name() == type_name).is_some() {
+    if src.enums().iter().find(|v| v.name() == type_name).is_some()
+        || src
+            .structs()
+            .iter()
+            .find(|s| s.name() == type_name)
+            .is_some()
+    {
         return Ok(Instruction::JmpRet(
             src.program_id_for(&type_name)
-                .ok_or(
-                    compiler_error!("Failed to resolve id of program: {}", type_name)
-                )?.clone(),
+                .ok_or(compiler_error!(
+                    "Failed to resolve id of program: {}",
+                    type_name
+                ))?
+                .clone(),
         ));
     }
 
-    Err(compiler_error!("unknown or not resolved type '{}'", type_name))
+    Err(compiler_error!(
+        "unknown or not resolved type '{}'",
+        type_name
+    ))
 }
 
 fn compile_optional<
@@ -353,14 +350,10 @@ fn compile_optional<
 >(
     src: &Source,
     type_name: &str,
-    depth: usize
+    depth: usize,
 ) -> Result<Vec<Instruction>, TypeCompileError> {
     let mut code = Vec::new();
-    debug_log!(
-        "{}Compile optional: {}",
-        "\t".repeat(depth),
-        type_name
-    );
+    debug_log!("{}Compile optional: {}", "\t".repeat(depth), type_name);
     code.push(Instruction::Optional);
     code.push(compile_type_ops(src, type_name, depth)?);
     Ok(code)
@@ -375,14 +368,10 @@ fn compile_extension<
 >(
     src: &Source,
     type_name: &str,
-    depth: usize
+    depth: usize,
 ) -> Result<Vec<Instruction>, TypeCompileError> {
     let mut code = Vec::new();
-    debug_log!(
-        "{}Compile extension: {}",
-        "\t".repeat(depth),
-        type_name
-    );
+    debug_log!("{}Compile extension: {}", "\t".repeat(depth), type_name);
     code.push(Instruction::Extension);
     code.push(compile_type_ops(src, type_name, depth)?);
     Ok(code)
@@ -397,20 +386,16 @@ fn compile_array<
 >(
     src: &Source,
     type_name: &str,
-    depth: usize
+    depth: usize,
 ) -> Result<Vec<Instruction>, TypeCompileError> {
     let mut code = Vec::new();
-    debug_log!(
-        "{}Compile array: {}",
-        "\t".repeat(depth),
-        type_name
-    );
+    debug_log!("{}Compile array: {}", "\t".repeat(depth), type_name);
 
     code.push(Instruction::PushCND);
 
     code.push(compile_type_ops(src, type_name, depth)?);
 
-    code.push(Instruction::JmpArrayCND(U48(0)));  // ptr will be filled by assembler == final pos of instruction - 1
+    code.push(Instruction::JmpArrayCND(U48(0))); // ptr will be filled by assembler == final pos of instruction - 1
     code.push(Instruction::PopCursor);
 
     Ok(code)
@@ -425,15 +410,11 @@ fn compile_enum<
 >(
     src: &Source,
     var_meta: &E,
-    depth: usize
+    depth: usize,
 ) -> Result<Vec<Instruction>, TypeCompileError> {
     let mut code = Vec::new();
 
-    debug_log!(
-        "{}Compile enum: {}",
-        "\t".repeat(depth),
-        var_meta.name()
-    );
+    debug_log!("{}Compile enum: {}", "\t".repeat(depth), var_meta.name());
 
     let variants = var_meta.variants();
 
@@ -479,7 +460,7 @@ pub fn compile_type<
 
     let mut type_name = match src.resolve_alias(type_name) {
         Some(resolved) => resolved,
-        None => type_name.to_string()
+        None => type_name.to_string(),
     };
 
     if let Some(op) = instruction_for!(type_name.as_str()) {
@@ -492,9 +473,7 @@ pub fn compile_type<
         let maybe_err = compile_optional(src, &type_name, 3);
         let opt_code = ok_or_raise(
             maybe_err,
-            format_args!(
-                "while compiling optional {}:", type_name
-            )
+            format_args!("while compiling optional {}:", type_name),
         )?;
         program.code.extend(opt_code);
         return Ok(());
@@ -505,10 +484,7 @@ pub fn compile_type<
         let maybe_err = compile_extension(src, &type_name, 3);
         let ext_code = ok_or_raise(
             maybe_err,
-            format_args!(
-                "while compiling extension: {}",
-                type_name
-            )
+            format_args!("while compiling extension: {}", type_name),
         )?;
         program.code.extend(ext_code);
         return Ok(());
@@ -519,10 +495,7 @@ pub fn compile_type<
         let maybe_err = compile_array(src, &type_name, 3);
         let arr_code = ok_or_raise(
             maybe_err,
-            format_args!(
-                "while compiling array: {}",
-                type_name
-            )
+            format_args!("while compiling array: {}", type_name),
         )?;
         program.code.extend(arr_code);
         return Ok(());
@@ -530,9 +503,12 @@ pub fn compile_type<
 
     if let Some(var_meta) = src.enums().iter().find(|v| v.name() == type_name) {
         return if program.name != var_meta.name() {
-            program.code.push(Instruction::JmpRet (
+            program.code.push(Instruction::JmpRet(
                 src.program_id_for(var_meta.name())
-                    .ok_or(compiler_error!("Failed to resolve id of program: {}", var_meta.name()))?
+                    .ok_or(compiler_error!(
+                        "Failed to resolve id of program: {}",
+                        var_meta.name()
+                    ))?
                     .clone(),
             ));
             Ok(())
@@ -540,21 +516,21 @@ pub fn compile_type<
             let maybe_err = compile_enum(src, var_meta, 3);
             let var_opts = ok_or_raise(
                 maybe_err,
-                format_args!(
-                    "while compiling enum: {}",
-                    type_name
-                )
+                format_args!("while compiling enum: {}", type_name),
             )?;
             program.code.extend(var_opts);
             Ok(())
-        }
+        };
     }
 
     if let Some(struct_meta) = src.structs().iter().find(|s| s.name() == type_name) {
         return if program.name != struct_meta.name() {
             program.code.push(Instruction::JmpRet(
                 src.program_id_for(struct_meta.name())
-                    .ok_or(compiler_error!("Failed to resolve id of program: {}", struct_meta.name()))?
+                    .ok_or(compiler_error!(
+                        "Failed to resolve id of program: {}",
+                        struct_meta.name()
+                    ))?
                     .clone(),
             ));
             Ok(())
@@ -566,11 +542,11 @@ pub fn compile_type<
                     Some(op) => program.code.push(Instruction::IO(op)),
                     None => {
                         compile_type(src, &field.type_name(), program)?;
-                    },
+                    }
                 }
             }
             Ok(())
-        }
+        };
     }
 
     Err(compiler_error!("unknown type '{}'", type_name))
@@ -581,7 +557,7 @@ pub fn compile_program<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug,
 >(
     src: &Source,
     program_name: String,
@@ -596,16 +572,18 @@ pub fn compile_program<
 
     if src.resolve_alias(&program_name).is_some() {
         debug_log!("\t\t{} is an alias, skip...", program_name);
-        return Ok(())
+        return Ok(());
     }
 
     let mut program = namespace.get_program_or_init(&program_name)?;
 
-    compile_type(src, &program_name, &mut program)
-        .map_err(|e| compiler_error!(
+    compile_type(src, &program_name, &mut program).map_err(|e| {
+        compiler_error!(
             "\n\tWhile compiling program {}:\n\t{}",
-            program_name, e.to_string())
-        )?;
+            program_name,
+            e.to_string()
+        )
+    })?;
 
     let ctype = if src.is_variant(&program_name) {
         1u8
@@ -618,18 +596,14 @@ pub fn compile_program<
         match op {
             Instruction::JmpRet(id) => {
                 program.deps.insert(*id);
-            },
-            _ => ()
+            }
+            _ => (),
         }
     }
 
-    program.code.insert(
-        0,
-        Instruction::Section(
-            ctype,
-            program.id
-        )
-    );
+    program
+        .code
+        .insert(0, Instruction::Section(ctype, program.id));
 
     if ctype == 2u8 {
         program.code.push(Instruction::PopCursor);
@@ -645,27 +619,19 @@ pub fn compile_source<
     T: TypeDef,
     E: EnumDef,
     S: StructDef<T>,
-    Source: SourceCode<A, T, E, S> + Clone + Default + Debug
+    Source: SourceCode<A, T, E, S> + Clone + Default + Debug,
 >(
     src: &Source,
 ) -> Result<ProgramNamespace<A, T, E, S, Source>, TypeCompileError> {
     let mut ns = ProgramNamespace::from_source(src);
     debug_log!("Compile source structs...");
     for struct_meta in src.structs() {
-        compile_program(
-            src,
-            struct_meta.name().to_string(),
-            &mut ns
-        )?
+        compile_program(src, struct_meta.name().to_string(), &mut ns)?
     }
 
     debug_log!("Compile source enums...");
     for variant in src.enums() {
-        compile_program(
-            src,
-            variant.name().to_string(),
-            &mut ns
-        )?;
+        compile_program(src, variant.name().to_string(), &mut ns)?;
     }
 
     ns.calculate_string_map();

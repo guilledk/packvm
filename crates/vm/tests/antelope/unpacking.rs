@@ -1,26 +1,22 @@
-use serde::Serialize;
-use serde_json::from_str;
-use antelope::{
-    chain::{
-        abi::{ABI},
-        binary_extension::BinaryExtension,
-    },
-    serializer::{Encoder, Decoder, Packer, PackerError},
-    EnumPacker, StructPacker
-};
 use antelope::chain::abi::ShipABI;
 use antelope::chain::key_type::{KeyType, KeyTypeTrait};
 use antelope::chain::signature::Signature;
 use antelope::util::hex_to_bytes;
-use packvm::{PackVM, Value, Instruction, compiler::{
-    compile_type,
-    SourceCode,
-    ProgramNamespace,
-    antelope::AntelopeSourceCode,
-}, compile_source, assemble, run_unpack, run_pack};
+use antelope::{
+    chain::{abi::ABI, binary_extension::BinaryExtension},
+    serializer::{Decoder, Encoder, Packer, PackerError},
+    EnumPacker, StructPacker,
+};
 use packvm::isa::diff_values;
 use packvm::utils::numbers::{Float, Integer, Long};
-use packvm_macros::{VMStruct, VMEnum};
+use packvm::{
+    assemble, compile_source,
+    compiler::{antelope::AntelopeSourceCode, compile_type, ProgramNamespace, SourceCode},
+    run_pack, run_unpack, Instruction, PackVM, Value,
+};
+use packvm_macros::{VMEnum, VMStruct};
+use serde::Serialize;
+use serde_json::from_str;
 
 const TESTABI: &str = include_str!("test_abi.json");
 
@@ -36,8 +32,7 @@ macro_rules! unpack_and_assert {
         let mut program = Default::default();
 
         // do the equivalent of compile_program
-        compile_type(&src, $type_name, &mut program)
-            .unwrap_or_else(|e| panic!("{}", e.reason));
+        compile_type(&src, $type_name, &mut program).unwrap_or_else(|e| panic!("{}", e.reason));
         program.code.push(Instruction::Exit);
 
         ns.set_program(program.clone());
@@ -60,9 +55,17 @@ fn test_unpack_bool() {
 
 #[test]
 fn test_unpack_uints() {
-    unpack_and_assert!("uint8",  &[0x12],                             Value::Int(Integer::from(0x12u8)));
-    unpack_and_assert!("uint16", &[0x34, 0x12],                       Value::Int(Integer::from(0x1234u16)));
-    unpack_and_assert!("uint32", &[0x78, 0x56, 0x34, 0x12],           Value::Int(Integer::from(0x12345678u32)));
+    unpack_and_assert!("uint8", &[0x12], Value::Int(Integer::from(0x12u8)));
+    unpack_and_assert!(
+        "uint16",
+        &[0x34, 0x12],
+        Value::Int(Integer::from(0x1234u16))
+    );
+    unpack_and_assert!(
+        "uint32",
+        &[0x78, 0x56, 0x34, 0x12],
+        Value::Int(Integer::from(0x12345678u32))
+    );
     unpack_and_assert!(
         "uint64",
         &[0xef, 0xcd, 0xab, 0x90, 0x78, 0x56, 0x34, 0x12],
@@ -77,9 +80,13 @@ fn test_unpack_uints() {
 
 #[test]
 fn test_unpack_ints() {
-    unpack_and_assert!("int8",  &[0xff],                       Value::Int(Integer::from(-1i8)));
-    unpack_and_assert!("int16", &[0xfe, 0xff],                 Value::Int(Integer::from(-2i16)));
-    unpack_and_assert!("int32", &[0xfd, 0xff, 0xff, 0xff],     Value::Int(Integer::from(-3i32)));
+    unpack_and_assert!("int8", &[0xff], Value::Int(Integer::from(-1i8)));
+    unpack_and_assert!("int16", &[0xfe, 0xff], Value::Int(Integer::from(-2i16)));
+    unpack_and_assert!(
+        "int32",
+        &[0xfd, 0xff, 0xff, 0xff],
+        Value::Int(Integer::from(-3i32))
+    );
     unpack_and_assert!(
         "int64",
         &[0xfc, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff],
@@ -94,15 +101,27 @@ fn test_unpack_ints() {
 
 #[test]
 fn test_unpack_varuint32() {
-    unpack_and_assert!("varuint32", &[0x7F],       Value::Int(Integer::from(0x7Fu32)));
-    unpack_and_assert!("varuint32", &[0x80, 0x01], Value::Int(Integer::from(0x80u32)));
+    unpack_and_assert!("varuint32", &[0x7F], Value::Int(Integer::from(0x7Fu32)));
+    unpack_and_assert!(
+        "varuint32",
+        &[0x80, 0x01],
+        Value::Int(Integer::from(0x80u32))
+    );
 }
 
 #[test]
 fn test_unpack_floats() {
-    unpack_and_assert!("float32", &1.0f32.to_le_bytes(), Value::Float(Float::from(1.0f32)));
-    unpack_and_assert!("float64", &2.0f64.to_le_bytes(), Value::Float(Float::from(2.0f64)));
-    unpack_and_assert!("float128", &[1u8; 16],           Value::Bytes([1u8; 16].to_vec()));
+    unpack_and_assert!(
+        "float32",
+        &1.0f32.to_le_bytes(),
+        Value::Float(Float::from(1.0f32))
+    );
+    unpack_and_assert!(
+        "float64",
+        &2.0f64.to_le_bytes(),
+        Value::Float(Float::from(2.0f64))
+    );
+    unpack_and_assert!("float128", &[1u8; 16], Value::Bytes([1u8; 16].to_vec()));
 }
 
 #[test]
@@ -126,19 +145,12 @@ fn test_unpack_array() {
     unpack_and_assert!(
         "uint32[]",
         enc.get_bytes(),
-        Value::Array(vec![
-            Integer::from(1u32).into(),
-            Integer::from(2u32).into()
-        ]),
+        Value::Array(vec![Integer::from(1u32).into(), Integer::from(2u32).into()]),
     );
 
     let mut enc = Encoder::new(0);
     Vec::<u32>::new().pack(&mut enc);
-    unpack_and_assert!(
-        "uint32[]",
-        enc.get_bytes(),
-        Value::Array(vec![]),
-    );
+    unpack_and_assert!("uint32[]", enc.get_bytes(), Value::Array(vec![]),);
 }
 
 #[test]
@@ -227,7 +239,9 @@ fn test_unpack_struct() {
             "fourth".to_string(),
         ],
         field5: Some(vec![1, 2, 3, 4, 5]),
-        field6: TestEnum::Type2(TestStructV2 {field: "type2".to_string()}),
+        field6: TestEnum::Type2(TestStructV2 {
+            field: "type2".to_string(),
+        }),
         field7: false,
         field8: 69,
         field9: 69,
@@ -247,7 +261,9 @@ fn test_unpack_struct() {
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let pid = src.program_id_for("test_struct").expect("failed to get program");
+    let pid = src
+        .program_id_for("test_struct")
+        .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
     let decoded = run_unpack!(vm, pid, enc.get_bytes());
@@ -291,7 +307,9 @@ fn test_unpack_signature() {
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let pid = src.program_id_for("test_sig").expect("failed to get program");
+    let pid = src
+        .program_id_for("test_sig")
+        .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
     let decoded = run_unpack!(vm, pid, encoded.as_slice());
@@ -300,13 +318,12 @@ fn test_unpack_signature() {
         if let Value::Bytes(raw_sig) = sig_field {
             Signature::from_bytes(
                 raw_sig[1..].to_vec(),
-                KeyType::from_index(raw_sig[0]).unwrap()
+                KeyType::from_index(raw_sig[0]).unwrap(),
             )
         } else {
             panic!("failed to unpack signature expected bytes: {:?}", sig_field);
         }
     } else {
-
         panic!("failed to unpack signature expected map: {:?}", decoded);
     };
 
@@ -318,50 +335,50 @@ const SIGBLOCKABI: &str = include_str!("signed_block_abi.json");
 #[test]
 fn test_unpack_signed_block() {
     /*
-   {
-    "previous": "00000016da8c9c17de0607fb22bbcccdfc2f95b9c85461d7ccde1fc2c097410e",
-    "new_producers": null,
-    "header_extensions": [],
-    "timestamp": 1599457177,
-    "schedule_version": 0,
-    "action_mroot": "439dd15b0ea5bf1a1a399e9f3423ad1e6041810cde302e40931adfccded25013",
-    "producer": 6138663577826885632,
-    "producer_signature": "001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b",
-    "block_extensions": [],
-    "transaction_mroot": "fec74205e7462bb45dba6e21443ceb7ccd0c68dd9e6dcafddcb6c18b5c0f7d44",
-    "transactions": [
-        {
-            "cpu_usage_us": 1103,
-            "net_usage_words": 42,
-            "status": 0,
-            "trx": {
-                "packed_context_free_data": "",
-                "signatures": [
-                    "001f1678ccbb248596e3aecb7c37fa5569a37db46d7f09563e1231aaa9bed40fac730c2a2eecd58434cb683dbcdd2f854ab4cc854e874f9f8a4a3695971f66e7d6fc"
-                ],
-                "packed_trx": "d02a18681500f507a3a200ff0000030000000000ea305500409e9a2264b89a010000000000ea305500000000a8ed3232660000000000ea305550352ab4a9d177570100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000000000000ea305500b0cafe4873bd3e010000000000ea305500000000a8ed3232140000000000ea305550352ab4a9d17757809698000000000000ea305500003f2a1ba6a24a010000000000ea305500000000a8ed3232310000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000a08601000000000004544c4f530000000100",
-                "type": 1,
-                "compression": 0
-            }
-        },
-        {
-            "trx": {
-                "compression": 0,
-                "packed_trx": "d02a18681500f507a3a200ff00000100a6823403ea3055000000572d3ccdcd010000000000ea305500000000a8ed3232210000000000ea305550352ab4a9d17757a08601000000000004544c4f530000000000",
-                "type": 1,
-                "packed_context_free_data": "",
-                "signatures": [
-                    "001f71e1c8ec416f658f0a59d48e435ce9f539a72f980cd922407315277594e6c70f071a86ad33138b3dd37fdfc38434b3254c0dba17625f239de6c7ac7a7e7fb03e"
-                ]
+       {
+        "previous": "00000016da8c9c17de0607fb22bbcccdfc2f95b9c85461d7ccde1fc2c097410e",
+        "new_producers": null,
+        "header_extensions": [],
+        "timestamp": 1599457177,
+        "schedule_version": 0,
+        "action_mroot": "439dd15b0ea5bf1a1a399e9f3423ad1e6041810cde302e40931adfccded25013",
+        "producer": 6138663577826885632,
+        "producer_signature": "001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b",
+        "block_extensions": [],
+        "transaction_mroot": "fec74205e7462bb45dba6e21443ceb7ccd0c68dd9e6dcafddcb6c18b5c0f7d44",
+        "transactions": [
+            {
+                "cpu_usage_us": 1103,
+                "net_usage_words": 42,
+                "status": 0,
+                "trx": {
+                    "packed_context_free_data": "",
+                    "signatures": [
+                        "001f1678ccbb248596e3aecb7c37fa5569a37db46d7f09563e1231aaa9bed40fac730c2a2eecd58434cb683dbcdd2f854ab4cc854e874f9f8a4a3695971f66e7d6fc"
+                    ],
+                    "packed_trx": "d02a18681500f507a3a200ff0000030000000000ea305500409e9a2264b89a010000000000ea305500000000a8ed3232660000000000ea305550352ab4a9d177570100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000000000000ea305500b0cafe4873bd3e010000000000ea305500000000a8ed3232140000000000ea305550352ab4a9d17757809698000000000000ea305500003f2a1ba6a24a010000000000ea305500000000a8ed3232310000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000a08601000000000004544c4f530000000100",
+                    "type": 1,
+                    "compression": 0
+                }
             },
-            "status": 0,
-            "cpu_usage_us": 129,
-            "net_usage_words": 16
-        }
-    ],
-    "confirmed": 0
-}
-     */
+            {
+                "trx": {
+                    "compression": 0,
+                    "packed_trx": "d02a18681500f507a3a200ff00000100a6823403ea3055000000572d3ccdcd010000000000ea305500000000a8ed3232210000000000ea305550352ab4a9d17757a08601000000000004544c4f530000000000",
+                    "type": 1,
+                    "packed_context_free_data": "",
+                    "signatures": [
+                        "001f71e1c8ec416f658f0a59d48e435ce9f539a72f980cd922407315277594e6c70f071a86ad33138b3dd37fdfc38434b3254c0dba17625f239de6c7ac7a7e7fb03e"
+                    ]
+                },
+                "status": 0,
+                "cpu_usage_us": 129,
+                "net_usage_words": 16
+            }
+        ],
+        "confirmed": 0
+    }
+         */
     let encoded = hex_to_bytes("99c7555f0000000000ea3055000000000016da8c9c17de0607fb22bbcccdfc2f95b9c85461d7ccde1fc2c097410efec74205e7462bb45dba6e21443ceb7ccd0c68dd9e6dcafddcb6c18b5c0f7d44439dd15b0ea5bf1a1a399e9f3423ad1e6041810cde302e40931adfccded25013000000000000001f56003fdde5c4ead202d7dde4e7af74ae087aed3a699b5cc6745c9aa6beb14f36761919302cdd6a88cf410a8390fbd2cb76dd4ea0441f30b1fee0b781f11e812b02004f0400002a0101001f1678ccbb248596e3aecb7c37fa5569a37db46d7f09563e1231aaa9bed40fac730c2a2eecd58434cb683dbcdd2f854ab4cc854e874f9f8a4a3695971f66e7d6fc0000a102d02a18681500f507a3a200ff0000030000000000ea305500409e9a2264b89a010000000000ea305500000000a8ed3232660000000000ea305550352ab4a9d177570100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000100000001000216321ff9740bec8421cc2b0279c3a1852ea46e1e7b8159df3c937ad44e2fb6d6010000000000000000ea305500b0cafe4873bd3e010000000000ea305500000000a8ed3232140000000000ea305550352ab4a9d17757809698000000000000ea305500003f2a1ba6a24a010000000000ea305500000000a8ed3232310000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000a08601000000000004544c4f5300000001000081000000100101001f71e1c8ec416f658f0a59d48e435ce9f539a72f980cd922407315277594e6c70f071a86ad33138b3dd37fdfc38434b3254c0dba17625f239de6c7ac7a7e7fb03e000053d02a18681500f507a3a200ff00000100a6823403ea3055000000572d3ccdcd010000000000ea305500000000a8ed3232210000000000ea305550352ab4a9d17757a08601000000000004544c4f53000000000000");
 
     let abi: ShipABI = from_str(SIGBLOCKABI).expect("failed to parse ABI JSON");
@@ -369,7 +386,9 @@ fn test_unpack_signed_block() {
     let ns = compile_source!(src);
     let code = assemble!(&ns);
 
-    let pid = src.program_id_for("signed_block").expect("failed to get program");
+    let pid = src
+        .program_id_for("signed_block")
+        .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
     let decoded = run_unpack!(vm, pid, encoded.as_slice()).clone();

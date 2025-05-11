@@ -1,14 +1,10 @@
-use std::fmt::{Debug, Formatter};
-use crate::debug_log;
-use crate::{
-    utils::PackerError,
-    isa::Value,
-    isa_impl::{unpack}
-};
 use crate::compiler::assembly::Executable;
 use crate::compiler::RESERVED_IDS;
+use crate::debug_log;
 use crate::isa_impl::pack;
 use crate::utils::numbers::U48;
+use crate::{isa::Value, isa_impl::unpack, utils::PackerError};
+use std::fmt::{Debug, Formatter};
 
 /// ValueCursor allows PackVM to keep track where in a nested Value is the next operation going to
 /// touch, be for fetching a value to pack or unpacking the next bytes
@@ -46,28 +42,31 @@ impl ValueCursor {
     }
 }
 
-pub const PACKVM_RAM: usize = 1024 * 16;  // 16kb
+pub const PACKVM_RAM: usize = 1024 * 16; // 16kb
 
 #[derive(Clone)]
 pub struct PackVM {
-    pub(crate) bp: usize,  // buffer pointer: only needed for unpack
-    pub(crate) ip: U48,  // instruction pointer
-    pub(crate) fp: U48,  // field pointer: next field id
-    pub(crate) et: u32,  // enum type: next enum variant index
+    pub(crate) bp: usize, // buffer pointer: only needed for unpack
+    pub(crate) ip: U48,   // instruction pointer
+    pub(crate) fp: U48,   // field pointer: next field id
+    pub(crate) et: u32,   // enum type: next enum variant index
     pub(crate) ef: bool,  // emum flag: on unpack, used to not repeat enum -> struct double push
 
-    pub(crate) rp: usize,  // ram pointer
+    pub(crate) rp: usize, // ram pointer
     pub(crate) ram: [u8; PACKVM_RAM],
 
-    pub(crate) retstack: Vec<U48>,  // return stack: used by JmpRet & Exit instruction
+    pub(crate) retstack: Vec<U48>, // return stack: used by JmpRet & Exit instruction
 
     pub(crate) cursor: ValueCursor,
-    pub(crate) executable: Executable
+    pub(crate) executable: Executable,
 }
 
 impl PackVM {
     pub fn from_executable(executable: Executable) -> Self {
-        debug_log!("Initialized VM with executable: \n{}", executable.pretty_string());
+        debug_log!(
+            "Initialized VM with executable: \n{}",
+            executable.pretty_string()
+        );
         PackVM {
             bp: 0,
             ip: U48(0),
@@ -97,15 +96,13 @@ impl PackVM {
         self.cursor.stack.clear();
     }
 
-    pub fn run_pack(
-        &mut self,
-        program: U48,
-        io: &Value
-    ) -> Result<Vec<u8>, PackerError> {
+    pub fn run_pack(&mut self, program: U48, io: &Value) -> Result<Vec<u8>, PackerError> {
         self.reset();
         let mut buffer: Vec<u8> = vec![];
         let mut val = io.clone();
-        unsafe { self.cursor.push(&mut val as *mut _); }
+        unsafe {
+            self.cursor.push(&mut val as *mut _);
+        }
 
         self.ip = program - U48::from(RESERVED_IDS);
 
@@ -116,14 +113,12 @@ impl PackVM {
         Ok(buffer)
     }
 
-    pub fn run_unpack(
-        &mut self,
-        program: U48,
-        buffer: &[u8]
-    ) -> Result<Value, PackerError> {
+    pub fn run_unpack(&mut self, program: U48, buffer: &[u8]) -> Result<Value, PackerError> {
         self.reset();
         let mut val = Value::None;
-        unsafe { self.cursor.push(&mut val as *mut _); }
+        unsafe {
+            self.cursor.push(&mut val as *mut _);
+        }
 
         self.ip = program - U48::from(RESERVED_IDS);
 
@@ -139,7 +134,7 @@ impl PackVM {
         u32::from_le_bytes(
             self.ram[self.rp..self.rp + 4]
                 .try_into()
-                .expect("Could not get cnd from ram")
+                .expect("Could not get cnd from ram"),
         )
     }
 
@@ -175,7 +170,11 @@ impl Debug for PackVM {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
             "ip({:4}) bp({:5}) cnd({:4}) rp({:2}) iop({:2})  | {}",
-            self.ip, self.bp, self.cnd(), self.rp, self.cursor.len(),
+            self.ip,
+            self.bp,
+            self.cnd(),
+            self.rp,
+            self.cursor.len(),
             self.executable.pretty_op_string(self.ip)
         ))
     }

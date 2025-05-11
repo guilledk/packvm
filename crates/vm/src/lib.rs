@@ -2,20 +2,15 @@
 #![feature(specialization)]
 extern crate core;
 
-pub mod utils;
 pub mod compiler;
 pub mod isa;
-pub use isa::{
-    Value,
-    Instruction,
-};
+pub mod utils;
+pub use isa::{Instruction, Value};
 
 mod isa_impl;
 pub mod runtime;
 
-pub use runtime::{
-    PackVM,
-};
+pub use runtime::PackVM;
 
 #[cfg(feature = "python")]
 mod pyo3;

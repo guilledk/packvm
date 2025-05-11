@@ -1,7 +1,7 @@
-use antelope::chain::abi::{ShipABI};
-use serde_json::from_str;
-use packvm::{assemble, compile_source, debug_log};
+use antelope::chain::abi::ShipABI;
 use packvm::compiler::antelope::AntelopeSourceCode;
+use packvm::{assemble, compile_source, debug_log};
+use serde_json::from_str;
 
 const STD_ABI: &str = include_str!("std_abi.json");
 
