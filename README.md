@@ -76,54 +76,56 @@ where
 ## ISA
 
 ```rust
+pub enum DataInstruction {
+    Bool,
+    UInt(u8),
+    Int(u8),
+    Leb128(bool),
+    Float(u8),
+    Bytes,         // bytes with LEB128 encoded size first
+    BytesRaw(U48), // raw bytes, if param is > 0 do size check on stack value
+    String,        // utf-8 string with LEB128 encoded len
+}
+
 pub enum Instruction {
     // IO manipulation, what to pack/unpack next
-    Bool,
-    UInt{ size: u8 },
-    Int{ size: u8 },
-    VarUInt,
-    VarInt,
-    Float{ size: u8 },
-    Bytes,  // bytes with LEB128 encoded size first
-    BytesRaw{ size: u8},  // raw bytes, if param is > 0 do size check on stack value
-    String,  // utf-8 string with LEB128 encoded len
+    IO(DataInstruction),
 
     Optional,  // next value is optional, encode a flag as a u8 before
-    Extension,  // extensions are like optionals but they dont encode a flag in a u8
+    Extension, // extensions are like optionals but they dont encode a flag in a u8
 
-    // structure marks
-
-    Section(  // indicates a new program section
+    /// structure marks
+    // indicates a new program section
+    Section(
         u8,  // struct type: 1 = enum, 2 = struct
-        usize  // program id
+        U48, // program id
     ),
+    Field(U48), // indicate field name string id for next value
 
-    Field(usize),  // indicate field name string id for next value
-
-    // push condition from io into condition stack
-    // param is cnd type, 0 = array len, 1 = enum variant
-    PushCND(u8),
-
-    // discard condition from stack
-    PopCND,
-
-    // jumps
-    Jmp { ptr: usize },  // absolute jmp
+    /// jumps
+    // absolute jmp
+    Jmp(U48),
 
     // perform absolute jmp and return on next Exit instruction
-    JmpRet{ ptr: usize },
+    JmpRet(U48),
 
-
-    // conditional jumps based on first value on condition stack
-
-    // jump to ptr if current condition == value
-    JmpStructCND(
-        u32,  // cnd value
-        usize  // location to jump to
+    // jump depending on et register
+    JmpVariant(
+        u32, // et value
+        u16, // rel location to jump to
     ),
 
-    // jump to pointer if condition > 0
-    JmpArrayCND(usize),
+    /// array specific
+    // jump to pointer if array cnd > 0
+    JmpArrayCND(U48),
+
+    // push condition from io into ram
+    // used to indicate array len
+    PushCND,
+
+    /// other
+    // maybe pop a node from the cursor stack
+    PopCursor,
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,
