@@ -4,13 +4,7 @@ use tailcall::tailcall;
 
 use crate::isa::DataInstruction;
 use crate::utils::numbers::U48;
-use crate::{
-    debug_log, exit, field,
-    isa_impl::common::OpResult,
-    jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor,
-    utils::varint::{VarInt32, VarUInt32},
-    Instruction, PackVM, Value,
-};
+use crate::{debug_log, exit, field, isa_impl::common::OpResult, jmp, jmpacnd, jmpret, jmptrap, jmpvariant, packer_error, popcursor, utils::varint::{VarInt32, VarUInt32}, Instruction, PackVM, Value};
 
 macro_rules! vmgetio {
     ($vm:ident) => {{
@@ -290,12 +284,12 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
                     child_ptr = slot as *mut _;
                     cnd
                 } else {
-                    let next_popcnd = vm.executable.code[usize::from(vm.ip)..]
+                    let next_popcur = vm.executable.code[usize::from(vm.ip)..]
                         .iter()
                         .position(|op| op.cmp_type(&Instruction::PopCursor))
                         .ok_or(packer_error!("Can't find next CND pop"))?;
 
-                    vm.ip += U48::from(next_popcnd + 1);
+                    vm.ip += U48::from(next_popcur + 1);
                     0
                 }
             }
@@ -322,6 +316,10 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
 #[inline(always)]
 #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
 fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
+    vm.ip += 1;
+
+    if ctype == 0 { return Ok(()); }
+
     let child_ptr: *mut Value;
 
     {
@@ -354,7 +352,6 @@ fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
         unsafe { vm.cursor.push(child_ptr) };
     }
 
-    vm.ip += 1;
     Ok(())
 }
 #[tailcall]
@@ -432,12 +429,16 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             jmpret!(vm, ptr);
             exec(vm, buf)
         }
-        Instruction::JmpArrayCND(ptr) => {
-            jmpacnd!(vm, ptr)?;
+        Instruction::JmpArrayCND => {
+            jmpacnd!(vm)?;
             exec(vm, buf)
         }
         Instruction::JmpVariant(v, p) => {
             jmpvariant!(vm, v, U48(p as u64))?;
+            exec(vm, buf)
+        }
+        Instruction::JmpTrap => {
+            jmptrap!(vm);
             exec(vm, buf)
         }
         Instruction::Field(name) => {

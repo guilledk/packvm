@@ -347,9 +347,12 @@ pub enum Instruction {
         u16, // rel location to jump to
     ),
 
+    // jump trap, jump to section for pid based on first ram value ptr
+    JmpTrap,
+
     /// array specific
-    // jump to pointer if array cnd > 0
-    JmpArrayCND(U48),
+    // jump to prev instruction if array cnd > 0
+    JmpArrayCND,
 
     // push condition from io into ram
     // used to indicate array len

@@ -1,6 +1,6 @@
 use crate::isa::DataInstruction;
 use crate::utils::numbers::{Float, Integer, Long, U48};
-use crate::{debug_log, exit, field, jmp, jmpacnd, jmpret, jmpvariant, packer_error, popcursor};
+use crate::{debug_log, exit, field, jmp, jmpacnd, jmpret, jmptrap, jmpvariant, packer_error, popcursor};
 use crate::{
     isa_impl::common::OpResult,
     utils::{
@@ -295,15 +295,12 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
         vmstep!(vm);
         vm.push_cnd(cnd.0);
     } else {
-        let next_jmpacnd = vm.executable.code[usize::from(vm.ip)..]
+        let next_popcur = vm.executable.code[usize::from(vm.ip)..]
             .iter()
-            .position(|op| match op {
-                Instruction::JmpArrayCND(_) => true,
-                _ => false,
-            })
+            .position(|op| op.cmp_type(&Instruction::PopCursor))
             .ok_or(packer_error!("Can't find next CND pop"))?;
 
-        vm.ip += U48((next_jmpacnd + 1) as u64);
+        vm.ip += U48::from(next_popcur + 1);
         vmsetio!(vm, Value::Array(Vec::new()));
     }
 
@@ -312,6 +309,10 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 
 #[inline(always)]
 fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
+    vm.ip += 1;
+
+    if ctype == 0 { return Ok(()); }
+
     if !vm.ef {
         vmpushio!(vm, Value::Struct(HashMap::new()));
     }
@@ -337,8 +338,6 @@ fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
             }
         }
     }
-
-    vm.ip += 1;
     Ok(())
 }
 
@@ -416,12 +415,16 @@ pub fn exec(vm: &mut PackVM, buf: &[u8]) -> Result<(), PackerError> {
             jmpret!(vm, ptr);
             exec(vm, buf)
         }
-        Instruction::JmpArrayCND(ptr) => {
-            jmpacnd!(vm, ptr)?;
+        Instruction::JmpArrayCND => {
+            jmpacnd!(vm)?;
             exec(vm, buf)
         }
         Instruction::JmpVariant(v, p) => {
             jmpvariant!(vm, v, U48(p as u64))?;
+            exec(vm, buf)
+        }
+        Instruction::JmpTrap => {
+            jmptrap!(vm);
             exec(vm, buf)
         }
         Instruction::Field(name) => {

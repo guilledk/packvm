@@ -32,11 +32,20 @@ macro_rules! jmpvariant {
 }
 
 #[macro_export]
+macro_rules! jmptrap {
+    ($vm:ident) => {{
+        $vm.retstack.push($vm.ip);
+        let pid = u64::from_le_bytes($vm.ram[..8].try_into().unwrap());
+        $vm.ip = U48(pid);
+    }};
+}
+
+#[macro_export]
 macro_rules! jmpacnd {
-    ($vm:ident, $ptr:expr) => {{
+    ($vm:ident) => {{
         let cnd = $vm.sub_cnd(1);
         if cnd > 0 {
-            $vm.ip = $ptr;
+            $vm.ip -= 1;
         } else {
             $vm.pop_cnd();
             $vm.ip += 1;

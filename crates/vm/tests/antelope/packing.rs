@@ -12,7 +12,7 @@ use packvm::utils::numbers::{Float, Integer, Long};
 use packvm::{
     assemble, compile_source,
     compiler::{antelope::AntelopeSourceCode, compile_type, ProgramNamespace, SourceCode},
-    run_pack, Instruction, PackVM, Value,
+    run_pack, Instruction, PackVM, RunTarget, Value,
 };
 use packvm_macros::{VMEnum, VMStruct};
 use serde::Serialize;
@@ -40,7 +40,7 @@ macro_rules! pack_and_assert {
         // finally assemble and run
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let encoded = run_pack!(vm, program.id, $value);
+        let encoded = run_pack!(vm, &RunTarget::new(program.id, None), $value);
 
         // compare result with expected
         assert_eq!(encoded, $expected);
@@ -268,7 +268,7 @@ fn test_pack_struct() {
         .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let encoded = run_pack!(vm, pid, &val);
+    let encoded = run_pack!(vm, &pid, &val);
     assert_eq!(encoded, enc.get_bytes());
 }
 
@@ -314,7 +314,7 @@ fn test_pack_get_status_request_v0() {
         .program_id_for("request")
         .expect("failed to get program");
     let mut vm = PackVM::from_executable(code);
-    let encoded = run_pack!(vm, pid, &input);
+    let encoded = run_pack!(vm, &pid, &input);
 
     assert_eq!(encoded.as_slice(), encoder.get_bytes());
 }
@@ -373,7 +373,7 @@ fn test_pack_newaccount() {
         .program_id_for("newaccount")
         .expect("failed to get program");
     let mut vm = PackVM::from_executable(code);
-    let encoded = run_pack!(vm, pid, &value);
+    let encoded = run_pack!(vm, &pid, &value);
 
     assert_eq!(encoded, params_raw);
 
@@ -385,4 +385,51 @@ fn test_pack_newaccount() {
     //     ],
     //     data: encoder.get_bytes().to_vec(),
     // };
+}
+
+#[test]
+fn test_pack_authority_array_trap() {
+    let mut encoder = Encoder::new(0);
+    let auths = vec![
+        Authority {
+            threshold: 1,
+            keys: vec![KeyWeight {
+                key: PublicKey::new_from_str(
+                    "PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm",
+                )
+                    .unwrap(),
+                weight: 1,
+            }],
+            accounts: vec![],
+            waits: vec![],
+        },
+        Authority {
+            threshold: 1,
+            keys: vec![KeyWeight {
+                key: PublicKey::new_from_str(
+                    "PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm",
+                )
+                    .unwrap(),
+                weight: 1,
+            }],
+            accounts: vec![],
+            waits: vec![],
+        },
+    ];
+    auths.pack(&mut encoder);
+    let value: Value = auths.into();
+    let auths_raw = encoder.get_bytes().to_vec();
+
+    let abi: ABI = from_str(EOSIOABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src
+        .program_id_for("authority[]")
+        .expect("failed to get program");
+    let mut vm = PackVM::from_executable(code);
+    let encoded = run_pack!(vm, &pid, &value);
+
+    assert_eq!(encoded, auths_raw);
 }

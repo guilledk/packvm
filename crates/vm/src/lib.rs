@@ -3,6 +3,7 @@
 extern crate core;
 
 pub mod compiler;
+pub use compiler::RunTarget;
 pub mod isa;
 pub mod utils;
 pub use isa::{Instruction, Value};

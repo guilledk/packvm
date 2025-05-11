@@ -1,6 +1,6 @@
-use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef};
+use crate::compiler::{compile_array, compile_extension, compile_optional, EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, TRAP_COUNT};
 use crate::compiler_error;
-use crate::isa::Instruction;
+use crate::isa::{DataInstruction, Instruction};
 use crate::utils::numbers::U48;
 use crate::utils::TypeCompileError;
 use crate::{debug_log, get_str_or_unknown};
@@ -45,6 +45,7 @@ impl Executable {
         match op {
             Instruction::Section(ctype, id) => {
                 let type_str = match ctype {
+                    0 => "trap",
                     1 => "emum",
                     2 => "struct",
                     _ => unreachable!(),
@@ -62,6 +63,7 @@ impl Executable {
         match op {
             Instruction::Section(ctype, id) => {
                 let type_str = match ctype {
+                    0 => "trap",
                     1 => "emum(1)",
                     2 => "struct(2)",
                     _ => unreachable!(),
@@ -131,9 +133,6 @@ fn assemble_sections<
                 Instruction::Jmp(jptr) => {
                     executable[ptr] = Instruction::Jmp(start_ptr + jptr);
                 }
-                Instruction::JmpArrayCND(_) => {
-                    executable[ptr] = Instruction::JmpArrayCND(U48(ptr as u64 - 1));
-                }
                 Instruction::Field(rel_str_id) => {
                     let src_strings = &sec_program.strings;
                     let field_name = match sec_program.strings.get(usize::from(rel_str_id)) {
@@ -188,6 +187,9 @@ pub fn assemble<
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
 ) -> Result<Executable, TypeCompileError> {
     let mut code = Vec::default();
+    for i in 0..TRAP_COUNT {
+        code.push(Instruction::Jmp(U48::from(i as u64)));
+    }
 
     // namespace .into_iter() is guaranteed to be in order of pid
     for program in src_ns.into_iter() {
@@ -208,6 +210,42 @@ pub fn assemble<
 
     assemble_sections(src_ns, &mut code, &sections)?;
 
+    // traps
+    let mut arr_code = compile_array(&src_ns.src, "u8", 1)?;
+    arr_code.iter_mut()
+        .for_each(|i| {
+            if *i == Instruction::IO(DataInstruction::UInt(1)) {
+                *i = Instruction::JmpTrap;
+            }
+        });
+    arr_code.insert(0, Instruction::Section(0, U48(0)));
+    arr_code.push(Instruction::Exit);
+
+    code[0] = Instruction::Jmp(U48::from(code.len()));
+    code.extend(arr_code);
+
+    let mut opt_code = compile_optional(&src_ns.src, "u8", 1)?;
+    opt_code.iter_mut()
+        .for_each(|i| if *i == Instruction::IO(DataInstruction::UInt(1)) {
+            *i = Instruction::JmpTrap;
+        });
+    opt_code.insert(0, Instruction::Section(0, U48(0)));
+    opt_code.push(Instruction::Exit);
+
+    code[1] = Instruction::Jmp(U48::from(code.len()));
+    code.extend(opt_code);
+
+    let mut ext_code = compile_extension(&src_ns.src, "u8", 1)?;
+    ext_code.iter_mut()
+        .for_each(|i| if *i == Instruction::IO(DataInstruction::UInt(1)) {
+            *i = Instruction::JmpTrap;
+        });
+    ext_code.insert(0, Instruction::Section(0, U48(0)));
+    ext_code.push(Instruction::Exit);
+
+    code[2] = Instruction::Jmp(U48::from(code.len()));
+    code.extend(ext_code);
+
     let exec = Executable {
         code,
         str_map: src_ns.strings.clone(),
@@ -216,10 +254,10 @@ pub fn assemble<
     #[cfg(feature = "debug")]
     {
         // validate
-        for (jmp_i, op) in exec.code[..src_ns.len()].iter().cloned().enumerate() {
+        for (jmp_i, op) in exec.code[TRAP_COUNT..src_ns.len()+TRAP_COUNT].iter().cloned().enumerate() {
             match op {
                 Instruction::Jmp(ptr) => {
-                    let pid = U48::from(jmp_i + crate::compiler::RESERVED_IDS);
+                    let pid = U48::from(jmp_i + crate::compiler::RESERVED_IDS );
 
                     let src_program = src_ns
                         .get_program(&pid)

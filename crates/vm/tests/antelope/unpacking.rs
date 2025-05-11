@@ -7,12 +7,14 @@ use antelope::{
     serializer::{Decoder, Encoder, Packer, PackerError},
     EnumPacker, StructPacker,
 };
+use antelope::chain::authority::{Authority, KeyWeight};
+use antelope::chain::public_key::PublicKey;
 use packvm::isa::diff_values;
 use packvm::utils::numbers::{Float, Integer, Long};
 use packvm::{
     assemble, compile_source,
     compiler::{antelope::AntelopeSourceCode, compile_type, ProgramNamespace, SourceCode},
-    run_pack, run_unpack, Instruction, PackVM, Value,
+    run_pack, run_unpack, Instruction, PackVM, RunTarget, Value,
 };
 use packvm_macros::{VMEnum, VMStruct};
 use serde::Serialize;
@@ -40,7 +42,7 @@ macro_rules! unpack_and_assert {
         // finally assemble and run
         let exec = assemble!(&ns);
         let mut vm = PackVM::from_executable(exec);
-        let decoded = run_unpack!(vm, program.id, $bytes);
+        let decoded = run_unpack!(vm, &RunTarget::new(program.id, None), $bytes);
 
         // compare result with expected
         assert_eq!(decoded, $expected);
@@ -266,7 +268,7 @@ fn test_unpack_struct() {
         .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let decoded = run_unpack!(vm, pid, enc.get_bytes());
+    let decoded = run_unpack!(vm, &pid, enc.get_bytes());
 
     if let Some(diffs) = diff_values(&decoded, &expected) {
         println!("Expected: {expected:#?}");
@@ -291,7 +293,7 @@ fn test_unpack_result() {
     let pid = src.program_id_for("result").expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    run_unpack!(vm, pid, encoded.as_slice());
+    run_unpack!(vm, &pid, encoded.as_slice());
 }
 
 #[test]
@@ -312,7 +314,7 @@ fn test_unpack_signature() {
         .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let decoded = run_unpack!(vm, pid, encoded.as_slice());
+    let decoded = run_unpack!(vm, &pid, encoded.as_slice());
     let dec_sig: Signature = if let Value::Struct(map) = decoded {
         let sig_field = map.get("sig").expect("failed to get sig field");
         if let Value::Bytes(raw_sig) = sig_field {
@@ -391,11 +393,58 @@ fn test_unpack_signed_block() {
         .expect("failed to get program");
 
     let mut vm = PackVM::from_executable(code);
-    let decoded = run_unpack!(vm, pid, encoded.as_slice()).clone();
-    let re_encoded = run_pack!(vm, pid, &decoded);
+    let decoded = run_unpack!(vm, &pid, encoded.as_slice()).clone();
+    let re_encoded = run_pack!(vm, &pid, &decoded);
 
     assert_eq!(re_encoded, encoded);
 
-    let re_decoded = run_unpack!(vm, pid, re_encoded.as_slice());
+    let re_decoded = run_unpack!(vm, &pid, re_encoded.as_slice());
     assert_eq!(re_decoded, decoded);
+}
+
+#[test]
+fn test_unpack_authority_array_trap() {
+    let mut encoder = Encoder::new(0);
+    let auths = vec![
+        Authority {
+            threshold: 1,
+            keys: vec![KeyWeight {
+                key: PublicKey::new_from_str(
+                    "PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm",
+                )
+                    .unwrap(),
+                weight: 1,
+            }],
+            accounts: vec![],
+            waits: vec![],
+        },
+        Authority {
+            threshold: 1,
+            keys: vec![KeyWeight {
+                key: PublicKey::new_from_str(
+                    "PUB_K1_7QsTidrSZpjBWi2dwhXZriaNKPjCB2dxcmETF91cEpoJtCwfcm",
+                )
+                    .unwrap(),
+                weight: 1,
+            }],
+            accounts: vec![],
+            waits: vec![],
+        },
+    ];
+    auths.pack(&mut encoder);
+    let value: Value = auths.into();
+    let auths_raw = encoder.get_bytes().to_vec();
+
+    let abi: ShipABI = from_str(STDABI).expect("failed to parse ABI JSON");
+    let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
+    let ns = compile_source!(src);
+    let code = assemble!(&ns);
+
+    let pid = src
+        .program_id_for("authority[]")
+        .expect("failed to get program");
+    let mut vm = PackVM::from_executable(code);
+    let decoded = run_unpack!(vm, &pid, &auths_raw);
+
+    assert_eq!(decoded, value);
 }

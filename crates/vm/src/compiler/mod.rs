@@ -83,7 +83,45 @@ pub trait StructDef<T: TypeDef> {
     fn fields(&self) -> &[T];
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TypeModifier {
+    Array = 0,
+    Optional = 1,
+    Extension = 2
+}
+
+pub const TRAP_COUNT: usize = 3;
 pub const RESERVED_IDS: usize = 1 + STD_TYPES.len();
+
+#[derive(Debug, Clone)]
+pub struct RunTarget {
+    pub pid: U48,
+    pub modifier: Option<TypeModifier>,
+}
+
+impl RunTarget {
+    pub fn new(pid: U48, modifier: Option<TypeModifier>) -> Self {
+        Self { pid, modifier }
+    }
+}
+
+impl From<(U48, Option<u8>)> for RunTarget {
+    fn from(value: (U48, Option<u8>)) -> Self {
+        let (pid, modifier) = value;
+        let modifier = if let Some(modifier) = modifier {
+            Some(match modifier {
+                0 => TypeModifier::Array,
+                1 => TypeModifier::Optional,
+                2 => TypeModifier::Extension,
+                _ => panic!("unexpected type modifier {modifier}!")
+            })
+        } else {
+            None
+        };
+        RunTarget { pid, modifier }
+    }
+}
 
 pub trait SourceCode<Alias: TypeAlias, Type: TypeDef, Enum: EnumDef, Struct: StructDef<Type>> {
     fn structs(&self) -> &[Struct];
@@ -91,26 +129,47 @@ pub trait SourceCode<Alias: TypeAlias, Type: TypeDef, Enum: EnumDef, Struct: Str
     fn aliases(&self) -> &[Alias];
     fn resolve_alias(&self, alias: &str) -> Option<String>;
 
+    fn resolve_modifier(&self, name: &str) -> Option<(String, TypeModifier)> {
+        if name.ends_with("[]") {
+            Some((name[..name.len() - 2].to_string(), TypeModifier::Array))
+        } else if name.ends_with("?") {
+            Some((name[..name.len() - 1].to_string(), TypeModifier::Optional))
+        } else if name.ends_with("$") {
+            Some((name[..name.len() - 1].to_string(), TypeModifier::Extension))
+        } else {
+            None
+        }
+    }
+
     // predicates
     fn is_std_type(&self, ty: &str) -> bool;
     fn is_alias_of(&self, alias: &str, ty: &str) -> bool;
     fn is_variant(&self, ty: &str) -> bool;
     fn is_variant_of(&self, ty: &str, var: &str) -> bool;
 
-    fn program_id_for(&self, name: &str) -> Option<U48> {
-        let name = match self.resolve_alias(name) {
-            Some(name) => name,
-            None => name.to_string(),
+    fn program_id_for(&self, name: &str) -> Option<RunTarget> {
+        let mut modifier = None;
+        let name = if let Some((unmod_name, modi)) = self.resolve_modifier(name) {
+            modifier = Some(modi);
+
+            unmod_name
+        } else {
+            name.to_string()
         };
 
-        if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
-            return Some((id + RESERVED_IDS).into());
-        }
+        let name = self.resolve_alias(&name).unwrap_or_else(|| name);
 
-        if let Some(id) = self.enums().iter().position(|s| s.name() == name) {
-            return Some((id + self.structs().len() + RESERVED_IDS).into());
-        }
+        let maybe_id = if let Some(id) = self.structs().iter().position(|s| s.name() == name) {
+            Some((id + RESERVED_IDS).into())
+        } else if let Some(id) = self.enums().iter().position(|s| s.name() == name) {
+            Some((id + self.structs().len() + RESERVED_IDS).into())
+        } else {
+            None
+        };
 
+        if let Some(pid) = maybe_id {
+            return Some(RunTarget::new(pid, modifier));
+        }
         None
     }
 }
@@ -126,7 +185,7 @@ pub struct Program {
 
 impl Program {
     pub fn index(&self) -> usize {
-        usize::from(self.id) - RESERVED_IDS
+        usize::from(self.id) - RESERVED_IDS + TRAP_COUNT
     }
 }
 
@@ -174,8 +233,8 @@ impl<
     }
 
     pub fn get_program_by_name(&self, name: &str) -> Option<&Program> {
-        if let Some(id) = self.src.program_id_for(name) {
-            return self.ns.get(&id);
+        if let Some(trgt) = self.src.program_id_for(name) {
+            return self.ns.get(&trgt.pid);
         }
         None
     }
@@ -185,13 +244,13 @@ impl<
     }
 
     pub fn get_program_or_init(&mut self, name: &str) -> Result<&mut Program, TypeCompileError> {
-        let id = self
+        let trgt = self
             .src
             .program_id_for(name)
             .ok_or(compiler_error!("Program \"{}\" unknown", name))?;
 
-        Ok(self.ns.entry(id).or_insert_with(|| Program {
-            id,
+        Ok(self.ns.entry(trgt.pid).or_insert_with(|| Program {
+            id: trgt.pid,
             name: name.to_string(),
             code: Vec::new(),
             deps: HashSet::new(),
@@ -319,7 +378,7 @@ pub fn compile_type_ops<
     {
         return Ok(Instruction::JmpRet(src.program_id_for(&type_name).ok_or(
             compiler_error!("Failed to resolve id of program: {}", type_name),
-        )?));
+        )?.pid));
     }
 
     Err(compiler_error!(
@@ -382,7 +441,7 @@ fn compile_array<
 
     code.push(compile_type_ops(src, type_name, depth)?);
 
-    code.push(Instruction::JmpArrayCND(U48(0))); // ptr will be filled by assembler == final pos of instruction - 1
+    code.push(Instruction::JmpArrayCND);
     code.push(Instruction::PopCursor);
 
     Ok(code)
@@ -494,7 +553,7 @@ pub fn compile_type<
                 src.program_id_for(var_meta.name()).ok_or(compiler_error!(
                     "Failed to resolve id of program: {}",
                     var_meta.name()
-                ))?,
+                ))?.pid,
             ));
             Ok(())
         } else {
@@ -513,7 +572,7 @@ pub fn compile_type<
                     .ok_or(compiler_error!(
                         "Failed to resolve id of program: {}",
                         struct_meta.name()
-                    ))?,
+                    ))?.pid,
             ));
             Ok(())
         } else {

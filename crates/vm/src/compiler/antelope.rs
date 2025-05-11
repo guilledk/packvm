@@ -470,6 +470,12 @@ impl From<Authority> for Value {
     }
 }
 
+impl From<Vec<Authority>> for Value {
+    fn from(value: Vec<Authority>) -> Self {
+        Value::Array(value.into_iter().map(Into::into).collect())
+    }
+}
+
 impl From<WaitWeight> for Value {
     fn from(value: WaitWeight) -> Self {
         Value::Struct(HashMap::from([

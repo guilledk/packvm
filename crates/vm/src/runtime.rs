@@ -1,5 +1,5 @@
 use crate::compiler::assembly::Executable;
-use crate::compiler::RESERVED_IDS;
+use crate::compiler::{RunTarget, TypeModifier, RESERVED_IDS, TRAP_COUNT};
 use crate::debug_log;
 use crate::isa_impl::pack;
 use crate::utils::numbers::U48;
@@ -96,7 +96,34 @@ impl PackVM {
         self.cursor.stack.clear();
     }
 
-    pub fn run_pack(&mut self, program: U48, io: &Value) -> Result<Vec<u8>, PackerError> {
+    fn set_target(&mut self, target: &RunTarget) {
+        if let Some(modifier) = target.modifier {
+            let pid = (target.pid - U48::from(RESERVED_IDS - TRAP_COUNT)).0.to_le_bytes();
+            self.ram[0] = pid[0];
+            self.ram[1] = pid[1];
+            self.ram[2] = pid[2];
+            self.ram[3] = pid[3];
+            self.ram[4] = pid[4];
+            self.ram[5] = pid[5];
+            self.ram[6] = pid[6];
+            self.ram[7] = pid[7];
+            match modifier {
+                TypeModifier::Array => {
+                    self.ip = U48(0);
+                }
+                TypeModifier::Optional => {
+                    self.ip = U48(1);
+                }
+                TypeModifier::Extension => {
+                    self.ip = U48(2);
+                }
+            }
+        } else {
+            self.ip = target.pid - U48::from(RESERVED_IDS - TRAP_COUNT);
+        }
+    }
+
+    pub fn run_pack(&mut self, target: &RunTarget, io: &Value) -> Result<Vec<u8>, PackerError> {
         self.reset();
         let mut buffer: Vec<u8> = vec![];
         let mut val = io.clone();
@@ -104,25 +131,25 @@ impl PackVM {
             self.cursor.push(&mut val as *mut _);
         }
 
-        self.ip = program - U48::from(RESERVED_IDS);
+        self.set_target(target);
 
-        debug_log!("Running pack program: {}", program);
+        debug_log!("Running pack program: {:?}", target);
 
         pack::exec(self, &mut buffer)?;
 
         Ok(buffer)
     }
 
-    pub fn run_unpack(&mut self, program: U48, buffer: &[u8]) -> Result<Value, PackerError> {
+    pub fn run_unpack(&mut self, target: &RunTarget, buffer: &[u8]) -> Result<Value, PackerError> {
         self.reset();
         let mut val = Value::None;
         unsafe {
             self.cursor.push(&mut val as *mut _);
         }
 
-        self.ip = program - U48::from(RESERVED_IDS);
+        self.set_target(target);
 
-        debug_log!("Running unpack program: {}", program);
+        debug_log!("Running unpack program: {:?}", target);
 
         unpack::exec(self, buffer)?;
 
