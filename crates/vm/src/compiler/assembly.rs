@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use bimap::BiHashMap;
-use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, RESERVED_IDS};
+use crate::compiler::{EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef};
 use crate::{debug_log, get_str_or_unknown};
 use crate::isa::Instruction;
 use crate::compiler_error;
@@ -221,7 +221,7 @@ pub fn assemble<
         for (jmp_i, op) in exec.code[..src_ns.len()].iter().cloned().enumerate() {
             match op {
                 Instruction::Jmp(ptr) => {
-                    let pid = U48::from(jmp_i + RESERVED_IDS);
+                    let pid = U48::from(jmp_i + crate::compiler::RESERVED_IDS);
 
                     let src_program = src_ns.get_program(&pid)
                         .ok_or(compiler_error!("Couldn't find source program: {}", pid))?;
