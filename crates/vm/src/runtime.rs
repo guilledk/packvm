@@ -98,15 +98,8 @@ impl PackVM {
 
     fn set_target(&mut self, target: &RunTarget) {
         if let Some(modifier) = target.modifier {
-            let pid = (target.pid - U48::from(RESERVED_IDS - TRAP_COUNT)).0.to_le_bytes();
-            self.ram[0] = pid[0];
-            self.ram[1] = pid[1];
-            self.ram[2] = pid[2];
-            self.ram[3] = pid[3];
-            self.ram[4] = pid[4];
-            self.ram[5] = pid[5];
-            self.ram[6] = pid[6];
-            self.ram[7] = pid[7];
+            let pid = target.pid - U48::from(RESERVED_IDS - TRAP_COUNT);
+            self.set_pid(pid);
             match modifier {
                 TypeModifier::Array => {
                     self.ip = U48(0);
@@ -154,6 +147,28 @@ impl PackVM {
         unpack::exec(self, buffer)?;
 
         Ok(val)
+    }
+
+    #[inline(always)]
+    pub fn pid(&self) -> U48 {
+        u64::from_le_bytes(
+            self.ram[..8]
+                .try_into()
+                .expect("Could not get pid from ram"),
+        ).into()
+    }
+
+    #[inline(always)]
+    pub fn set_pid(&mut self, pid: U48) {
+        let pid = pid.0.to_le_bytes();
+        self.ram[0] = pid[0];
+        self.ram[1] = pid[1];
+        self.ram[2] = pid[2];
+        self.ram[3] = pid[3];
+        self.ram[4] = pid[4];
+        self.ram[5] = pid[5];
+        self.ram[6] = pid[6];
+        self.ram[7] = pid[7];
     }
 
     #[inline(always)]

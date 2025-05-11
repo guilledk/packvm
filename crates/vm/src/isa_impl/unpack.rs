@@ -308,7 +308,7 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 }
 
 #[inline(always)]
-fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
+fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8, sid: U48) -> OpResult {
     vm.ip += 1;
 
     if ctype == 0 { return Ok(()); }
@@ -326,9 +326,12 @@ fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8) -> OpResult {
         vm.et = cnd.0;
         vm.ef = true;
 
+        let var_name = vm.executable.var_map.get(&sid)
+            .ok_or(packer_error!("Could not find sid: {sid} in var map!"))?[cnd.0 as usize].clone();
+
         match vm.cursor.current_mut() {
             Value::Struct(values) => {
-                values.insert("type".to_string(), Value::Int(Integer::from(cnd.0)));
+                values.insert("type".to_string(), Value::String(var_name));
             }
             _ => {
                 return Err(packer_error!(
@@ -395,8 +398,8 @@ pub fn exec(vm: &mut PackVM, buf: &[u8]) -> Result<(), PackerError> {
             extension(vm, buf)?;
             exec(vm, buf)
         }
-        Instruction::Section(ctype, _) => {
-            section(vm, buf, ctype)?;
+        Instruction::Section(ctype, sid) => {
+            section(vm, buf, ctype, sid)?;
             exec(vm, buf)
         }
         Instruction::PushCND => {

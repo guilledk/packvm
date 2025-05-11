@@ -91,6 +91,23 @@ pub enum TypeModifier {
     Extension = 2
 }
 
+impl From<u8> for TypeModifier {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => TypeModifier::Array,
+            1 => TypeModifier::Optional,
+            2 => TypeModifier::Extension,
+            _ => unreachable!()
+        }
+    }
+}
+
+impl From<TypeModifier> for u8 {
+    fn from(value: TypeModifier) -> Self {
+        value as u8
+    }
+}
+
 pub const TRAP_COUNT: usize = 3;
 pub const RESERVED_IDS: usize = 1 + STD_TYPES.len();
 

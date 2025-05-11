@@ -315,7 +315,7 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
 
 #[inline(always)]
 #[cfg_attr(not(feature = "debug"), allow(unused_variables))]
-fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
+fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8, sid: U48) -> OpResult {
     vm.ip += 1;
 
     if ctype == 0 { return Ok(()); }
@@ -333,6 +333,12 @@ fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8) -> OpResult {
                     })?;
 
                     let variant_id = match type_field {
+                        Value::String(var_name) => {
+                            vm.executable.var_map.get(&sid)
+                                .ok_or(packer_error!("Could not find sid: {sid} in var map!"))?
+                                .iter().position(|v| v == var_name)
+                                .ok_or(packer_error!("Could not find variant name {var_name} in vars!"))? as u32
+                        }
                         Value::Int(n) => n.as_u64().unwrap() as u32,
                         _ => return Err(packer_error!("`type` field is not Int")),
                     };
@@ -408,8 +414,8 @@ pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
             extension(vm)?;
             exec(vm, buf)
         }
-        Instruction::Section(ctype, _) => {
-            section(vm, buf, ctype)?;
+        Instruction::Section(ctype, sid) => {
+            section(vm, buf, ctype, sid)?;
             exec(vm, buf)
         }
 

@@ -58,3 +58,7 @@ macro_rules! packer_error {
         $crate::utils::PackerError::fmt(format_args!($($arg)*))
     };
 }
+
+pub trait VmTypeName {
+    const NAME: &'static str;
+}

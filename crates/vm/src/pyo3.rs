@@ -1,7 +1,47 @@
-use crate::Value;
-use pyo3::prelude::{PyDictMethods, PyListMethods};
-use pyo3::types::{PyDict, PyList};
-use pyo3::{Bound, IntoPyObject, IntoPyObjectExt, PyAny, PyErr, Python};
+use crate::{RunTarget, Value};
+use pyo3::prelude::{PyAnyMethods, PyDictMethods, PyListMethods};
+use pyo3::types::{PyDict, PyList, PyTuple};
+use pyo3::{Bound, FromPyObject, IntoPyObject, IntoPyObjectExt, PyAny, PyErr, PyResult, Python};
+use pyo3::exceptions::PyTypeError;
+use crate::compiler::TypeModifier;
+use crate::utils::numbers::U48;
+
+impl<'py> FromPyObject<'py> for RunTarget {
+    fn extract_bound(ob: &Bound<'py, PyAny>) -> PyResult<Self> {
+        if let Ok(seq) = ob.downcast::<pyo3::types::PySequence>() {
+            let pid = U48(seq.get_item(0)?.extract::<u64>()?);
+            let maybe_mod = seq.get_item(1)?;
+            let modifier: Option<TypeModifier> = if !maybe_mod.is_none() {
+                let _mod = maybe_mod.extract::<u8>()?;
+                Some(_mod.into())
+            } else {
+                None
+            };
+            Ok(RunTarget::new(pid, modifier))
+        } else {
+            Err(PyTypeError::new_err(format!("Cant convert {} into RunTarget", ob.to_string())))
+        }
+    }
+}
+
+impl<'py> IntoPyObject<'py> for RunTarget {
+    type Target = PyAny;
+    type Output = Bound<'py, Self::Target>;
+    type Error = PyErr;
+
+    fn into_pyobject(self, py: Python<'py>) -> Result<Self::Output, Self::Error> {
+        let m: Option<u8> = if let Some(tm) = self.modifier {
+            Some(tm.into())
+        } else {
+            None
+        };
+        let tuple = PyTuple::new(py, &[
+            self.pid.0.into_py_any(py)?,
+            m.into_py_any(py)?
+        ])?;
+        Ok(tuple.into_any())
+    }
+}
 
 impl<'py> IntoPyObject<'py> for Value {
     type Target = PyAny;

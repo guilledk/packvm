@@ -1,5 +1,5 @@
 use crate::compiler::{compile_array, compile_extension, compile_optional, EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, TRAP_COUNT};
-use crate::compiler_error;
+use crate::{compiler_error};
 use crate::isa::{DataInstruction, Instruction};
 use crate::utils::numbers::U48;
 use crate::utils::TypeCompileError;
@@ -19,6 +19,7 @@ macro_rules! assemble {
 pub struct Executable {
     pub code: Vec<Instruction>,
     pub str_map: BiHashMap<U48, String>,
+    pub var_map: HashMap<U48, Vec<String>>,
 }
 
 impl Debug for Executable {
@@ -46,7 +47,7 @@ impl Executable {
             Instruction::Section(ctype, id) => {
                 let type_str = match ctype {
                     0 => "trap",
-                    1 => "emum",
+                    1 => "enum",
                     2 => "struct",
                     _ => unreachable!(),
                 };
@@ -64,7 +65,7 @@ impl Executable {
             Instruction::Section(ctype, id) => {
                 let type_str = match ctype {
                     0 => "trap",
-                    1 => "emum(1)",
+                    1 => "enum(1)",
                     2 => "struct(2)",
                     _ => unreachable!(),
                 };
@@ -106,7 +107,7 @@ fn assemble_sections<
     Source: SourceCode<A, T, E, S> + Clone + Default + Debug,
 >(
     src_ns: &ProgramNamespace<A, T, E, S, Source>,
-    executable: &mut Vec<Instruction>,
+    executable: &mut Executable,
     sections: &HashMap<U48, U48>,
 ) -> Result<(), TypeCompileError> {
     let mut sec_keys = sections.keys().collect::<Vec<&U48>>();
@@ -121,17 +122,32 @@ fn assemble_sections<
             sec_name
         ))?;
 
+        if src_ns.src.is_variant(&sec_program.name) {
+            let var_meta = src_ns.src.enums()
+                .iter()
+                .find(|v| v.name() == sec_program.name)
+                .ok_or(compiler_error!("Could not find enum src for program {}", sec_program.name))?;
+
+            let mut vars = Vec::new();
+
+            for variant in var_meta.variants() {
+                vars.push(variant.clone());
+            }
+
+            executable.var_map.insert(sec_program.id, vars);
+        }
+
         debug_log!("Assemble section {} ({})", sec_name, sec_program.name);
 
         let mut ptr = usize::from(start_ptr);
         let mut found_exit = false;
-        while ptr < executable.len() {
-            match executable[ptr].clone() {
+        while ptr < executable.code.len() {
+            match executable.code[ptr].clone() {
                 Instruction::Exit => {
                     found_exit = true;
                 }
                 Instruction::Jmp(jptr) => {
-                    executable[ptr] = Instruction::Jmp(start_ptr + jptr);
+                    executable.code[ptr] = Instruction::Jmp(start_ptr + jptr);
                 }
                 Instruction::Field(rel_str_id) => {
                     let src_strings = &sec_program.strings;
@@ -142,7 +158,7 @@ fn assemble_sections<
                             &rel_str_id,
                             src_strings,
                             sec_program.code,
-                            Executable { code: executable.clone(), str_map: src_ns.strings.clone() }.pretty_string()
+                            executable.pretty_string()
                         ))
                     }?;
 
@@ -150,10 +166,10 @@ fn assemble_sections<
                         compiler_error!("Couldn't find absolute id of field str: {}", field_name),
                     )?;
 
-                    executable[ptr] = Instruction::Field(str_id);
+                    executable.code[ptr] = Instruction::Field(str_id);
                 }
                 Instruction::JmpRet(id) => {
-                    executable[ptr] = Instruction::JmpRet(
+                    executable.code[ptr] = Instruction::JmpRet(
                         *sections
                             .get(&id)
                             .ok_or(compiler_error!("Couldn't find section {}", id))?,
@@ -208,7 +224,13 @@ pub fn assemble<
         code.extend(program.code.clone());
     }
 
-    assemble_sections(src_ns, &mut code, &sections)?;
+    let mut exec = Executable {
+        code,
+        str_map: src_ns.strings.clone(),
+        var_map: HashMap::new(),
+    };
+
+    assemble_sections(src_ns, &mut exec, &sections)?;
 
     // traps
     let mut arr_code = compile_array(&src_ns.src, "u8", 1)?;
@@ -221,8 +243,8 @@ pub fn assemble<
     arr_code.insert(0, Instruction::Section(0, U48(0)));
     arr_code.push(Instruction::Exit);
 
-    code[0] = Instruction::Jmp(U48::from(code.len()));
-    code.extend(arr_code);
+    exec.code[0] = Instruction::Jmp(U48::from(exec.code.len()));
+    exec.code.extend(arr_code);
 
     let mut opt_code = compile_optional(&src_ns.src, "u8", 1)?;
     opt_code.iter_mut()
@@ -232,8 +254,8 @@ pub fn assemble<
     opt_code.insert(0, Instruction::Section(0, U48(0)));
     opt_code.push(Instruction::Exit);
 
-    code[1] = Instruction::Jmp(U48::from(code.len()));
-    code.extend(opt_code);
+    exec.code[1] = Instruction::Jmp(U48::from(exec.code.len()));
+    exec.code.extend(opt_code);
 
     let mut ext_code = compile_extension(&src_ns.src, "u8", 1)?;
     ext_code.iter_mut()
@@ -243,13 +265,8 @@ pub fn assemble<
     ext_code.insert(0, Instruction::Section(0, U48(0)));
     ext_code.push(Instruction::Exit);
 
-    code[2] = Instruction::Jmp(U48::from(code.len()));
-    code.extend(ext_code);
-
-    let exec = Executable {
-        code,
-        str_map: src_ns.strings.clone(),
-    };
+    exec.code[2] = Instruction::Jmp(U48::from(exec.code.len()));
+    exec.code.extend(ext_code);
 
     #[cfg(feature = "debug")]
     {

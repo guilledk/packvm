@@ -35,8 +35,7 @@ macro_rules! jmpvariant {
 macro_rules! jmptrap {
     ($vm:ident) => {{
         $vm.retstack.push($vm.ip);
-        let pid = u64::from_le_bytes($vm.ram[..8].try_into().unwrap());
-        $vm.ip = U48(pid);
+        $vm.ip = $vm.pid();
     }};
 }
 

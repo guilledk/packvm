@@ -40,6 +40,7 @@ pub fn vm_struct(input: TokenStream) -> TokenStream {
         _ => panic!("VMStruct can only be derived for structs"),
     };
     let field_count = fields.len();
+    let ty_lit = vm_name_attr(&input.attrs, &name.to_string());
 
     // build HashMap inserts
     let inserts = fields.iter().enumerate().map(|(idx, f)| {
@@ -72,6 +73,10 @@ pub fn vm_struct(input: TokenStream) -> TokenStream {
                 ::packvm::Value::Struct(map)
             }
         }
+
+        impl ::packvm::utils::VmTypeName for #name {
+            const NAME: &'static str = #ty_lit;
+        }
     }
         .into()
 }
@@ -79,33 +84,34 @@ pub fn vm_struct(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(VMEnum, attributes(vm_name))]
 pub fn vm_enum(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
-    let name = &input.ident;
+    let name  = &input.ident;
 
     let variants = match &input.data {
         Data::Enum(e) => &e.variants,
         _ => panic!("VMEnum can only be derived for enums"),
     };
 
-    // one match‑arm per variant
-    let arms = variants.iter().enumerate().map(|(idx, v)| {
+    let arms = variants.iter().map(|v| {
+        /* ensure tuple-struct variant with exactly one field */
         let v_ident = &v.ident;
-
-        // Require `Variant(T)`
-        if !matches!(v.fields, Fields::Unnamed(ref u) if u.unnamed.len()==1) {
+        if !matches!(v.fields, Fields::Unnamed(ref u) if u.unnamed.len() == 1) {
             panic!("Variant {v_ident} must be a tuple struct with exactly one field");
         }
+
+        // the contained type, e.g. TestStructV2
+        let inner_ty = &v.fields.iter().next().unwrap().ty;
 
         quote! {
             #name::#v_ident(inner) => {
                 let mut map = ::std::collections::HashMap::<String, ::packvm::Value>::new();
                 map.insert(
                     "type".to_string(),
-                    ::packvm::Value::Int(::packvm::utils::numbers::Integer::from(#idx as u32))
+                    ::packvm::Value::String(<#inner_ty as ::packvm::utils::VmTypeName>::NAME.to_string())
                 );
 
                 match inner.into() {
                     ::packvm::Value::Struct(fields) => map.extend(fields),
-                    other => { map.insert("value".to_string(), other); }
+                    other                           => { map.insert("value".to_string(), other); }
                 }
 
                 ::packvm::Value::Struct(map)
@@ -113,7 +119,6 @@ pub fn vm_enum(input: TokenStream) -> TokenStream {
         }
     });
 
-    // impl
     quote! {
         impl From<#name> for ::packvm::Value {
             #[inline]
@@ -122,5 +127,5 @@ pub fn vm_enum(input: TokenStream) -> TokenStream {
             }
         }
     }
-    .into()
+        .into()
 }
