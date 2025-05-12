@@ -303,18 +303,81 @@ pub enum DataOPCode {
     String = 7,
 }
 
-impl From<(DataOPCode, [u8; 6])> for DataInstruction {
-    fn from(op: (DataOPCode, [u8; 6])) -> Self {
-        match op.0 {
+impl From<u8> for DataOPCode {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => DataOPCode::Bool,
+            1 => DataOPCode::UInt,
+            2 => DataOPCode::Int,
+            3 => DataOPCode::Leb128,
+            4 => DataOPCode::Float,
+            5 => DataOPCode::Bytes,
+            6 => DataOPCode::BytesRaw,
+            7 => DataOPCode::String,
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl From<&DataInstruction> for DataOPCode {
+    fn from(value: &DataInstruction) -> Self {
+        match value {
+            DataInstruction::Bool => DataOPCode::Bool,
+            DataInstruction::UInt(_) => DataOPCode::UInt,
+            DataInstruction::Int(_) => DataOPCode::Int,
+            DataInstruction::Leb128(_) => DataOPCode::Leb128,
+            DataInstruction::Float(_) => DataOPCode::Float,
+            DataInstruction::Bytes => DataOPCode::Bytes,
+            DataInstruction::BytesRaw(_) => DataOPCode::BytesRaw,
+            DataInstruction::String => DataOPCode::String,
+        }
+    }
+}
+
+impl From<&[u8; 7]> for DataInstruction {
+    fn from(op: &[u8; 7]) -> Self {
+        match op[0].into() {
             DataOPCode::Bool => DataInstruction::Bool,
-            DataOPCode::UInt => DataInstruction::UInt(op.1[0]),
-            DataOPCode::Int => DataInstruction::Int(op.1[0]),
-            DataOPCode::Leb128 => DataInstruction::Leb128(op.1[0] == 1),
-            DataOPCode::Float => DataInstruction::Float(op.1[0]),
+            DataOPCode::UInt => DataInstruction::UInt(op[1]),
+            DataOPCode::Int => DataInstruction::Int(op[1]),
+            DataOPCode::Leb128 => DataInstruction::Leb128(op[1] == 1),
+            DataOPCode::Float => DataInstruction::Float(op[1]),
             DataOPCode::Bytes => DataInstruction::Bytes,
-            DataOPCode::BytesRaw => DataInstruction::BytesRaw((&op.1).into()),
+            DataOPCode::BytesRaw => {
+                DataInstruction::BytesRaw(U48::from(
+                    &op[1..7].try_into().unwrap(),
+                ))
+            },
             DataOPCode::String => DataInstruction::String,
         }
+    }
+}
+
+impl From<&DataInstruction> for [u8; 7] {
+    fn from(value: &DataInstruction) -> [u8; 7] {
+        let opcode = DataOPCode::from(value);
+        let mut raw = [0u8; 7];
+        raw[0] = opcode as u8;
+        match value {
+            DataInstruction::UInt(size) => {
+                raw[1] = *size;
+            }
+            DataInstruction::Int(size) => {
+                raw[1] = *size;
+            }
+            DataInstruction::Leb128(signed) => {
+                raw[1] = if *signed { 1 } else { 0 };
+            }
+            DataInstruction::Float(size) => {
+                raw[1] = *size;
+            }
+            DataInstruction::BytesRaw(size) => {
+                let bytes: [u8; 6] = (*size).into();
+                raw[1..7].copy_from_slice(&bytes);
+            }
+            _ => ()
+        }
+        raw
     }
 }
 
@@ -364,6 +427,124 @@ pub enum Instruction {
 
     // exit program or if ptrs remain in the return stack, pop one and jmp to it
     Exit,
+}
+
+#[repr(u8)]
+#[derive(Debug, Clone)]
+pub enum OPCode {
+    IO = 0,
+    Optional = 1,
+    Extension = 2,
+    Section = 3,
+    Field = 4,
+    Jmp = 5,
+    JmpRet = 6,
+    JmpVariant = 7,
+    JmpTrap = 8,
+    JmpArrayCND = 9,
+    PushCND = 10,
+    PopCursor = 11,
+    Exit = 12,
+}
+
+impl From<u8> for OPCode {
+    #[inline(always)]
+    fn from(value: u8) -> Self {
+        match value {
+            0 => OPCode::IO,
+            1 => OPCode::Optional,
+            2 => OPCode::Extension,
+            3 => OPCode::Section,
+            4 => OPCode::Field,
+            5 => OPCode::Jmp,
+            6 => OPCode::JmpRet,
+            7 => OPCode::JmpVariant,
+            8 => OPCode::JmpTrap,
+            9 => OPCode::JmpArrayCND,
+            10 => OPCode::PushCND,
+            11 => OPCode::PopCursor,
+            12 => OPCode::Exit,
+            _ => panic!("Unknown opcode {}", value),
+        }
+    }
+}
+
+impl From<&Instruction> for OPCode {
+    fn from(value: &Instruction) -> Self {
+        match value {
+            Instruction::IO(_) => OPCode::IO,
+            Instruction::Optional => OPCode::Optional,
+            Instruction::Extension => OPCode::Extension,
+            Instruction::Section(_, _) => OPCode::Section,
+            Instruction::Field(_) => OPCode::Field,
+            Instruction::Jmp(_) => OPCode::Jmp,
+            Instruction::JmpRet(_) => OPCode::JmpRet,
+            Instruction::JmpVariant(_, _) => OPCode::JmpVariant,
+            Instruction::JmpTrap => OPCode::JmpTrap,
+            Instruction::JmpArrayCND => OPCode::JmpArrayCND,
+            Instruction::PushCND => OPCode::PushCND,
+            Instruction::PopCursor => OPCode::PopCursor,
+            Instruction::Exit => OPCode::Exit,
+        }
+    }
+}
+
+impl From<&[u8; 8]> for Instruction {
+    fn from(op: &[u8; 8]) -> Self {
+        match OPCode::from(op[0]) {
+            OPCode::IO => Instruction::IO(DataInstruction::from(&op[1..8].try_into().unwrap())),
+            OPCode::Optional => Instruction::Optional,
+            OPCode::Extension => Instruction::Extension,
+            OPCode::Section => Instruction::Section(op[1], U48::from(&op[2..8].try_into().unwrap())),
+            OPCode::Field => Instruction::Field(U48::from(&op[2..8].try_into().unwrap())),
+            OPCode::Jmp => Instruction::Jmp(U48::from(&op[2..8].try_into().unwrap())),
+            OPCode::JmpRet => Instruction::JmpRet(U48::from(&op[2..8].try_into().unwrap())),
+            OPCode::JmpVariant => Instruction::JmpVariant(
+                u32::from_le_bytes(op[2..6].try_into().unwrap()),
+                u16::from_le_bytes(op[6..8].try_into().unwrap()),
+            ),
+            OPCode::JmpTrap => Instruction::JmpTrap,
+            OPCode::JmpArrayCND => Instruction::JmpArrayCND,
+            OPCode::PushCND => Instruction::PushCND,
+            OPCode::PopCursor => Instruction::PopCursor,
+            OPCode::Exit => Instruction::Exit,
+        }
+    }
+}
+
+impl From<&Instruction> for [u8; 8] {
+    fn from(value: &Instruction) -> Self {
+        let opcode = OPCode::from(value);
+        let mut raw = [0u8; 8];
+        raw[0] = opcode as u8;
+        let rest: [u8; 7] = match value {
+            Instruction::IO(dataop) => dataop.into(),
+            Instruction::Section(ctype, sid) => {
+                let sid: [u8; 6] = (*sid).into();
+                [*ctype, sid[0], sid[1], sid[2], sid[3], sid[4], sid[5]]
+            }
+            Instruction::Field(fid) => {
+                let fid: [u8; 6] = (*fid).into();
+                [0, fid[0], fid[1], fid[2], fid[3], fid[4], fid[5]]
+            }
+            Instruction::Jmp(ptr) => {
+                let ptr: [u8; 6] = (*ptr).into();
+                [0, ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]]
+            }
+            Instruction::JmpRet(ptr) => {
+                let ptr: [u8; 6] = (*ptr).into();
+                [0, ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]]
+            }
+            Instruction::JmpVariant(var_idx, rel_ptr) => {
+                let var_idx: [u8; 4] = var_idx.to_le_bytes();
+                let rel_ptr: [u8; 2] = rel_ptr.to_le_bytes();
+                [0, var_idx[0], var_idx[1], var_idx[2], var_idx[3], rel_ptr[0], rel_ptr[1]]
+            }
+            _ => [0; 7]
+        };
+        raw[1..8].copy_from_slice(&rest);
+        raw
+    }
 }
 
 impl Instruction {

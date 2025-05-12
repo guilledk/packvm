@@ -1,4 +1,4 @@
-use crate::compiler::{compile_array, compile_extension, compile_optional, EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, TRAP_COUNT};
+use crate::compiler::{compile_array, compile_extension, compile_optional, insert_reserved_strings, EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, RESERVED_IDS, TRAP_COUNT};
 use crate::{compiler_error};
 use crate::isa::{DataInstruction, Instruction};
 use crate::utils::numbers::U48;
@@ -7,6 +7,7 @@ use crate::{debug_log, get_str_or_unknown};
 use bimap::BiHashMap;
 use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
+use crate::utils::varint::VarUInt32;
 
 #[macro_export]
 macro_rules! assemble {
@@ -15,8 +16,9 @@ macro_rules! assemble {
     };
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 pub struct Executable {
+    pub ns_checksum: [u8; 32],
     pub code: Vec<Instruction>,
     pub str_map: BiHashMap<U48, String>,
     pub var_map: HashMap<U48, Vec<String>>,
@@ -94,6 +96,14 @@ impl Executable {
             let op_str = self.pretty_op_string(U48::from(i));
             s += format!("\n\t{i}: {op_str}").as_str();
         }
+
+        s += "\nStrings [\n";
+        for i in 0..self.str_map.len() {
+            let not_str = format!("unknown {i}");
+            let str = self.str_map.get_by_left(&U48::from(i)).unwrap_or(&not_str);
+            s += &format!("\t{i:4}: {str:?}\n");
+        }
+        s += "]";
 
         s
     }
@@ -225,6 +235,7 @@ pub fn assemble<
     }
 
     let mut exec = Executable {
+        ns_checksum: src_ns.checksum(),
         code,
         str_map: src_ns.strings.clone(),
         var_map: HashMap::new(),
@@ -274,7 +285,7 @@ pub fn assemble<
         for (jmp_i, op) in exec.code[TRAP_COUNT..src_ns.len()+TRAP_COUNT].iter().cloned().enumerate() {
             match op {
                 Instruction::Jmp(ptr) => {
-                    let pid = U48::from(jmp_i + crate::compiler::RESERVED_IDS );
+                    let pid = U48::from(jmp_i + RESERVED_IDS );
 
                     let src_program = src_ns
                         .get_program(&pid)
@@ -299,4 +310,159 @@ pub fn assemble<
     }
 
     Ok(exec)
+}
+
+impl From<&Executable> for Vec<u8> {
+    fn from(exec: &Executable) -> Self {
+        let mut artifact: Vec<u8> = Vec::with_capacity(exec.code.len() * 8);
+        for op in exec.code.iter() {
+            let rawop: [u8; 8] = op.into();
+            artifact.extend_from_slice(&rawop);
+        }
+
+        // encode string map
+        // first u32 with total map len
+        let str_map_len_raw = ((exec.str_map.len() - RESERVED_IDS) as u32).to_le_bytes();
+        artifact.extend_from_slice(&str_map_len_raw);
+
+        // for each string, leb128 encoded len, then utf8 bytes
+        for i in RESERVED_IDS..exec.str_map.len() {
+            let s = exec.str_map.get_by_left(&U48::from(i))
+                .expect(&format!("Failed to get str({i}) for map"));
+
+            let s_leb = VarUInt32::from(s.len() as u32);
+            let (raw, rlen) = s_leb.encode();
+            artifact.extend_from_slice(&raw[..rlen]);
+            artifact.extend_from_slice(&s.as_bytes());
+        }
+
+        // encode var map
+        // first u32 with total map len
+        let var_map_len_raw = (exec.var_map.len() as u32).to_le_bytes();
+        artifact.extend_from_slice(&var_map_len_raw);
+
+        // for each string array, leb128 encoded total len, then for each str
+        // leb128 str len + str bytes
+        for (pid, variants) in &exec.var_map {
+            // pid as u48 bytes
+            let pid_raw: [u8; 6] = (*pid).into();
+            artifact.extend_from_slice(&pid_raw);
+
+            // total len
+            let s_leb = VarUInt32::from(variants.len() as u32);
+            let (raw, rlen) = s_leb.encode();
+            artifact.extend_from_slice(&raw[..rlen]);
+
+            for s in variants {
+                let s_leb = VarUInt32::from(s.len() as u32);
+                let (raw, rlen) = s_leb.encode();
+                artifact.extend_from_slice(&raw[..rlen]);
+
+                artifact.extend_from_slice(&s.as_bytes());
+            }
+        }
+
+        // add namespace checksum
+        artifact.extend_from_slice(&exec.ns_checksum);
+
+        // encode amount of operations as u64 at the end
+        let op_len_raw = (exec.code.len() as u64).to_le_bytes();
+        artifact.extend_from_slice(&op_len_raw);
+
+        artifact
+    }
+}
+
+impl TryFrom<&[u8]> for Executable {
+    type Error = String;
+
+    fn try_from(raw: &[u8]) -> Result<Self, Self::Error> {
+        let op_len = u64::from_le_bytes(raw[raw.len() - 8..].try_into().unwrap()) as usize;
+
+        let mut code = Vec::with_capacity(op_len);
+        let mut ptr = 0;
+        while code.len() < op_len {
+            code.push(Instruction::from(&raw[ptr..ptr + 8].try_into().unwrap()));
+            ptr += 8;
+        }
+
+        // decode string map
+        let mut str_map: BiHashMap<U48, String> = BiHashMap::new();
+
+        // read map len as u32
+        let str_map_len = u32::from_le_bytes(raw[ptr..ptr + 4].try_into().unwrap()) as usize;
+        ptr += 4;
+
+        while str_map.len() < str_map_len {
+            // read leb128 encoded str len
+            let (s_leb, size) = VarUInt32::decode(&raw[ptr..])
+                .map_err(|e| e.to_string())?;
+            let s_len = s_leb.0 as usize;
+            ptr += size;
+
+            // read utf8 string
+            let str = String::from_utf8(raw[ptr..ptr + s_len].to_vec())
+                .map_err(|e| e.to_string())?;
+            ptr += s_len;
+
+            // insert into map
+            str_map.insert(U48::from(str_map.len() + RESERVED_IDS), str);
+        }
+
+        insert_reserved_strings(&mut str_map);
+
+        // decode var map
+        let mut var_map: HashMap<U48, Vec<String>> = HashMap::new();
+
+        // read map len as u32
+        let var_map_len = u32::from_le_bytes(raw[ptr..ptr + 4].try_into().unwrap()) as usize;
+        ptr += 4;
+
+        while var_map.len() < var_map_len {
+            let pid = U48::from(&raw[ptr..ptr + 6].try_into().unwrap());
+            ptr += 6;
+
+            // read leb128 encoded str array len
+            let (ss_leb, size) = VarUInt32::decode(&raw[ptr..])
+                .map_err(|e| e.to_string())?;
+            let ss_len = ss_leb.0 as usize;
+            ptr += size;
+
+            let mut strings = Vec::with_capacity(ss_len);
+            while strings.len() < ss_len {
+                // read leb128 encoded str len
+                let (s_leb, size) = VarUInt32::decode(&raw[ptr..])
+                    .map_err(|e| e.to_string())?;
+                let s_len = s_leb.0 as usize;
+                ptr += size;
+
+                // read utf8 string
+                let str = String::from_utf8(raw[ptr..ptr + s_len].to_vec())
+                    .map_err(|e| e.to_string())?;
+                ptr += s_len;
+
+                strings.push(str);
+            }
+
+            var_map.insert(pid, strings);
+        }
+
+        // read namespace checksum
+        let ns_checksum: [u8; 32] = raw[ptr..ptr+32].try_into().unwrap();
+        ptr += 32;
+
+        // skip over already read op count u64
+        ptr += 8;
+
+        if ptr != raw.len() {
+            return Err(format!("Final pointer location not equal to end: {} != {}", ptr, raw.len()));
+        }
+
+        Ok(Executable{
+            ns_checksum,
+            code,
+            str_map,
+            var_map,
+        })
+    }
 }

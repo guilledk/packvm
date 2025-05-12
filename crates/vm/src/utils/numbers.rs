@@ -37,6 +37,21 @@ impl From<&[u8; 6]> for U48 {
     }
 }
 
+impl From<&U48> for [u8; 6] {
+    #[inline(always)]
+    fn from(v: &U48) -> Self {
+        let n = v.0 & MASK;
+        [
+            n as u8,
+            (n >> 8) as u8,
+            (n >> 16) as u8,
+            (n >> 24) as u8,
+            (n >> 32) as u8,
+            (n >> 40) as u8,
+        ]
+    }
+}
+
 impl From<U48> for [u8; 6] {
     #[inline(always)]
     fn from(v: U48) -> Self {
@@ -49,6 +64,13 @@ impl From<U48> for [u8; 6] {
             (n >> 32) as u8,
             (n >> 40) as u8,
         ]
+    }
+}
+
+impl From<&U48> for u64 {
+    #[inline(always)]
+    fn from(v: &U48) -> Self {
+        v.0
     }
 }
 

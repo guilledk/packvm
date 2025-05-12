@@ -84,6 +84,10 @@ impl PackVM {
         }
     }
 
+    pub fn executable(&self) -> &Executable {
+        &self.executable
+    }
+
     pub fn reset(&mut self) {
         self.bp = 0;
         self.fp = U48(0);

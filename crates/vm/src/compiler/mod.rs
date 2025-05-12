@@ -14,6 +14,8 @@ use std::error::Error;
 use std::fmt;
 use std::fmt::Debug;
 use std::marker::PhantomData;
+use itertools::Itertools;
+use sha2::{Digest, Sha256};
 
 #[inline(always)]
 pub fn ok_or_panic<T, E: Error>(maybe_err: Result<T, E>) -> T {
@@ -189,6 +191,36 @@ pub trait SourceCode<Alias: TypeAlias, Type: TypeDef, Enum: EnumDef, Struct: Str
         }
         None
     }
+
+    fn checksum(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+
+        for s in self.structs() {
+            h.update(s.name().as_bytes());
+
+            for f in s.fields() {
+                h.update(f.name().as_bytes());
+                h.update(f.type_name().as_bytes());
+            }
+        }
+
+        for e in self.enums() {
+            h.update(e.name().as_bytes());
+            for v in e.variants() {
+                h.update(v.as_bytes());
+            }
+        }
+
+        for a in self.aliases() {
+            h.update(a.from_type_name().as_bytes());
+            h.update(a.new_type_name().as_bytes());
+        }
+
+        h.update(TRAP_COUNT.to_le_bytes());
+        h.update(RESERVED_IDS.to_le_bytes());
+
+        h.finalize().into()
+    }
 }
 
 pub struct Program {
@@ -215,6 +247,14 @@ impl Default for Program {
             deps: Default::default(),
             strings: Default::default(),
         }
+    }
+}
+
+pub fn insert_reserved_strings(str_map: &mut BiHashMap<U48, String>) {
+    str_map.insert(U48(0), "__reserved".to_string());
+    for i in 1..RESERVED_IDS {
+        str_map
+            .insert(U48::from(i), format!("__reserved_{}", STD_TYPES[i - 1]));
     }
 }
 
@@ -283,41 +323,62 @@ impl<
         self.ns.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.ns.is_empty()
+    }
+
+    pub fn sorted_str_map(&self) -> Vec<(&U48, &String)> {
+        self.strings.iter()
+            .sorted_by_key(|(k, _)| k.0)
+            .collect()
+    }
+
     pub fn calculate_string_map(&mut self) {
         self.strings.clear();
 
-        // insert reserved strings
-        self.strings.insert(U48(0), "__reserved".to_string());
-        for i in 1..RESERVED_IDS {
-            self.strings
-                .insert(U48::from(i), format!("__reserved_{}", STD_TYPES[i - 1]));
+        insert_reserved_strings(&mut self.strings);
+
+        for (id, name) in self.into_iter()
+            .map(|p| (p.id.clone(), p.name.clone()))
+            .collect::<Vec<(U48, String)>>()
+        {
+            self.strings.insert(id, name);
         }
 
-        let mut field_id = U48::from(self.len() + RESERVED_IDS);
-        for program in self.into_iter().cloned().collect::<Vec<Program>>() {
-            self.strings.insert(program.id, program.name.clone());
-            for string in &program.strings {
-                if self.strings.contains_right(string) {
+        let mut field_id = U48::from(self.strings.len());
+        for p_strings in self.into_iter()
+            .map(|p| p.strings.clone())
+            .collect::<Vec<Vec<String>>>()
+        {
+            for string in p_strings {
+                if self.strings.contains_right(&string) {
                     continue;
                 }
-                self.strings.insert(field_id, string.clone());
+                self.strings.insert(field_id, string);
                 field_id += U48(1);
             }
         }
         #[cfg(feature = "debug")]
         {
-            let mut strings = self
-                .strings
-                .iter()
-                .map(|(id, s)| (*id, s.clone()))
-                .collect::<Vec<(U48, String)>>();
-            strings.sort();
+            let smap = self.sorted_str_map();
             debug_log!("Calulated string map: [");
-            for s in strings {
-                debug_log!("{:?}", s);
+            for entry in smap {
+                debug_log!("\t{:?}", entry);
             }
             debug_log!("]");
         }
+    }
+
+    pub fn checksum(&self) -> [u8; 32] {
+        let mut h = Sha256::new();
+        h.update(self.src.checksum());
+
+        for (sid, str) in self.sorted_str_map() {
+            h.update(&Into::<[u8; 6]>::into(sid));
+            h.update(str.as_bytes());
+        }
+
+        h.finalize().into()
     }
 }
 

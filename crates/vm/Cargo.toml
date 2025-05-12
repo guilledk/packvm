@@ -24,6 +24,8 @@ tailcall = "1.0.1"
 antelope-client.workspace = true
 bimap = "0.6.3"
 pyo3 = { version = "0.23.5", optional = true}
+sha2 = "0.10.9"
+itertools = "0.14.0"
 
 [dev-dependencies]
 serde = "1.0.219"
