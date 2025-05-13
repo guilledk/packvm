@@ -20,3 +20,25 @@ categories = ["encoding"]
 packvm-macros.path = "crates/macros"
 antelope-client = { git = "https://github.com/openrepublic/antelope-rs.git", rev = "1f3fe8c45cf9674f45c612cf2358987a0d84d1b4" }
 # antelope-client.path = "../antelope-rs/crates/antelope"
+
+
+[profile.release]
+opt-level = 3
+lto = "fat"  # slowest link times
+# lto = "thin"
+
+codegen-units = 1
+panic = "abort"  # remove unwinder, shrinks and speeds up binary
+incremental = false  # ensure full optimisation passes
+
+debug-assertions = false  # disable   debug_assert! & identical intrinsics
+overflow-checks  = false  # wrap-around semantics like C
+
+# make build scripts fast, but runtime deps hot
+[profile.release.package."*"]
+opt-level       = 3
+codegen-units   = 1
+
+[profile.release.build-override]  # build-scripts / proc-macros
+opt-level = 0
+codegen-units = 256

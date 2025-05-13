@@ -1,6 +1,11 @@
 pub mod numbers;
 pub mod varint;
 
+#[inline(always)]
+pub fn bytes_to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
 #[macro_export]
 #[cfg(feature = "debug")]
 macro_rules! debug_log {
@@ -59,6 +64,7 @@ macro_rules! packer_error {
     };
 }
 
+/// Used by VMStruct & VMEnum macros to resolve enum variants vm name correctly
 pub trait VmTypeName {
     const NAME: &'static str;
 }

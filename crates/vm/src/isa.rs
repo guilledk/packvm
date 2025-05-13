@@ -278,7 +278,7 @@ pub fn diff_values(left: &Value, right: &Value) -> Option<Vec<String>> {
     Some(diffs)
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum DataInstruction {
     Bool,
     UInt(u8),
@@ -381,7 +381,7 @@ impl From<&DataInstruction> for [u8; 7] {
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum Instruction {
     // IO manipulation, what to pack/unpack next
     IO(DataInstruction),
@@ -403,12 +403,6 @@ pub enum Instruction {
 
     // perform absolute jmp and return on next Exit instruction
     JmpRet(U48),
-
-    // jump depending on et register
-    JmpVariant(
-        u32, // et value
-        u16, // rel location to jump to
-    ),
 
     // jump trap, jump to section for pid based on first ram value ptr
     JmpTrap,
@@ -439,12 +433,11 @@ pub enum OPCode {
     Field = 4,
     Jmp = 5,
     JmpRet = 6,
-    JmpVariant = 7,
-    JmpTrap = 8,
-    JmpArrayCND = 9,
-    PushCND = 10,
-    PopCursor = 11,
-    Exit = 12,
+    JmpTrap = 7,
+    JmpArrayCND = 8,
+    PushCND = 9,
+    PopCursor = 10,
+    Exit = 11,
 }
 
 impl From<u8> for OPCode {
@@ -458,12 +451,11 @@ impl From<u8> for OPCode {
             4 => OPCode::Field,
             5 => OPCode::Jmp,
             6 => OPCode::JmpRet,
-            7 => OPCode::JmpVariant,
-            8 => OPCode::JmpTrap,
-            9 => OPCode::JmpArrayCND,
-            10 => OPCode::PushCND,
-            11 => OPCode::PopCursor,
-            12 => OPCode::Exit,
+            7 => OPCode::JmpTrap,
+            8 => OPCode::JmpArrayCND,
+            9 => OPCode::PushCND,
+            10 => OPCode::PopCursor,
+            11 => OPCode::Exit,
             _ => panic!("Unknown opcode {}", value),
         }
     }
@@ -479,7 +471,6 @@ impl From<&Instruction> for OPCode {
             Instruction::Field(_) => OPCode::Field,
             Instruction::Jmp(_) => OPCode::Jmp,
             Instruction::JmpRet(_) => OPCode::JmpRet,
-            Instruction::JmpVariant(_, _) => OPCode::JmpVariant,
             Instruction::JmpTrap => OPCode::JmpTrap,
             Instruction::JmpArrayCND => OPCode::JmpArrayCND,
             Instruction::PushCND => OPCode::PushCND,
@@ -499,10 +490,6 @@ impl From<&[u8; 8]> for Instruction {
             OPCode::Field => Instruction::Field(U48::from(&op[2..8].try_into().unwrap())),
             OPCode::Jmp => Instruction::Jmp(U48::from(&op[2..8].try_into().unwrap())),
             OPCode::JmpRet => Instruction::JmpRet(U48::from(&op[2..8].try_into().unwrap())),
-            OPCode::JmpVariant => Instruction::JmpVariant(
-                u32::from_le_bytes(op[2..6].try_into().unwrap()),
-                u16::from_le_bytes(op[6..8].try_into().unwrap()),
-            ),
             OPCode::JmpTrap => Instruction::JmpTrap,
             OPCode::JmpArrayCND => Instruction::JmpArrayCND,
             OPCode::PushCND => Instruction::PushCND,
@@ -517,32 +504,30 @@ impl From<&Instruction> for [u8; 8] {
         let opcode = OPCode::from(value);
         let mut raw = [0u8; 8];
         raw[0] = opcode as u8;
-        let rest: [u8; 7] = match value {
-            Instruction::IO(dataop) => dataop.into(),
+        match value {
+            Instruction::IO(dataop) => {
+                let rawop: [u8; 7] = dataop.into();
+                raw[1..8].clone_from_slice(&rawop)
+            },
             Instruction::Section(ctype, sid) => {
                 let sid: [u8; 6] = (*sid).into();
-                [*ctype, sid[0], sid[1], sid[2], sid[3], sid[4], sid[5]]
+                raw[1] = *ctype;
+                raw[2..8].clone_from_slice(&sid);
             }
             Instruction::Field(fid) => {
                 let fid: [u8; 6] = (*fid).into();
-                [0, fid[0], fid[1], fid[2], fid[3], fid[4], fid[5]]
+                raw[2..8].clone_from_slice(&fid);
             }
             Instruction::Jmp(ptr) => {
                 let ptr: [u8; 6] = (*ptr).into();
-                [0, ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]]
+                raw[2..8].clone_from_slice(&ptr);
             }
             Instruction::JmpRet(ptr) => {
                 let ptr: [u8; 6] = (*ptr).into();
-                [0, ptr[0], ptr[1], ptr[2], ptr[3], ptr[4], ptr[5]]
+                raw[2..8].clone_from_slice(&ptr);
             }
-            Instruction::JmpVariant(var_idx, rel_ptr) => {
-                let var_idx: [u8; 4] = var_idx.to_le_bytes();
-                let rel_ptr: [u8; 2] = rel_ptr.to_le_bytes();
-                [0, var_idx[0], var_idx[1], var_idx[2], var_idx[3], rel_ptr[0], rel_ptr[1]]
-            }
-            _ => [0; 7]
+            _ => ()
         };
-        raw[1..8].copy_from_slice(&rest);
         raw
     }
 }

@@ -542,21 +542,19 @@ fn compile_enum<
 
     let variants = var_meta.variants();
 
-    // if variants.len() == 1 {
-    //     code.push(Instruction::PushCND(1));
-    //     code.push(compile_type_ops(src, &variants[0], depth)?);
-    //     code.push(Instruction::PopCND);
-    //     return Ok(code)
-    // }
+    if variants.len() == 1 {
+        code.push(compile_type_ops(src, &variants[0], depth)?);
+        return Ok(code)
+    }
 
     let vars_count = variants.len();
 
-    let end_ptr = vars_count * 3;
+    let end_ptr = vars_count * 2;
 
-    // variant index based jump table
-    for (i, _var_name) in var_meta.variants().iter().enumerate() {
-        code.push(Instruction::JmpVariant(i as u32, (vars_count + i) as u16));
-    }
+    // // variant index based jump table
+    // for (i, _var_name) in var_meta.variants().iter().enumerate() {
+    //     code.push(Instruction::JmpVariant(i as u32, (vars_count + i) as u16));
+    // }
 
     // finally add each of the variant implementations code and their Jmp to post definition
     for (i, var_name) in var_meta.variants().iter().enumerate() {

@@ -1,6 +1,8 @@
 use crate::isa::DataInstruction;
 use crate::utils::numbers::{Float, Integer, Long, U48};
-use crate::{debug_log, exit, field, jmp, jmpacnd, jmpret, jmptrap, jmpvariant, packer_error, popcursor};
+use crate::{
+    debug_log, exit, field, jmp, jmpacnd, jmpret, jmptrap, packer_error, popcursor,
+};
 use crate::{
     isa_impl::common::OpResult,
     utils::{
@@ -10,7 +12,6 @@ use crate::{
     Instruction, PackVM, Value,
 };
 use std::collections::HashMap;
-use tailcall::tailcall;
 
 macro_rules! vmpushio {
     ($vm:ident, $val:expr) => {{
@@ -311,7 +312,9 @@ fn pushcnd(vm: &mut PackVM, buffer: &[u8]) -> OpResult {
 fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8, sid: U48) -> OpResult {
     vm.ip += 1;
 
-    if ctype == 0 { return Ok(()); }
+    if ctype == 0 {
+        return Ok(());
+    }
 
     if !vm.ef {
         vmpushio!(vm, Value::Struct(HashMap::new()));
@@ -323,11 +326,18 @@ fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8, sid: U48) -> OpResult {
             .map_err(|e| packer_error!("while unpacking bytes cnd: {}", e))?;
         vm.bp += cnd_size;
 
-        vm.et = cnd.0;
+        if cnd.0 > 0 {
+            vm.ip += U48::from(2 * cnd.0 as u64);
+        }
+
         vm.ef = true;
 
-        let var_name = vm.executable.var_map.get(&sid)
-            .ok_or(packer_error!("Could not find sid: {sid} in var map!"))?[cnd.0 as usize].clone();
+        let var_name = vm
+            .executable
+            .var_map
+            .get(&sid)
+            .ok_or(packer_error!("Could not find sid: {sid} in var map!"))?[cnd.0 as usize]
+            .clone();
 
         match vm.cursor.current_mut() {
             Value::Struct(values) => {
@@ -344,102 +354,41 @@ fn section(vm: &mut PackVM, buffer: &[u8], ctype: u8, sid: U48) -> OpResult {
     Ok(())
 }
 
-#[tailcall]
-pub fn exec(vm: &mut PackVM, buf: &[u8]) -> Result<(), PackerError> {
-    debug_log!("{:?}", vm);
-    match vm.executable.code[vm.ip.0 as usize] {
-        Instruction::IO(ref op) => match op {
-            DataInstruction::Bool => {
-                boolean(vm, buf)?;
-                exec(vm, buf)
-            }
-            DataInstruction::UInt(size) => {
-                if *size == 16 {
-                    long(vm, buf, false)?
-                } else {
-                    integer(vm, buf, *size, false)?
-                };
-                exec(vm, buf)
-            }
-            DataInstruction::Int(size) => {
-                if *size == 16 {
-                    long(vm, buf, true)?
-                } else {
-                    integer(vm, buf, *size, true)?
-                };
-                exec(vm, buf)
-            }
-            DataInstruction::Float(size) => {
-                float(vm, buf, *size)?;
-                exec(vm, buf)
-            }
-            DataInstruction::Leb128(signed) => {
-                leb128(vm, buf, *signed)?;
-                exec(vm, buf)
-            }
-            DataInstruction::Bytes => {
-                bytes(vm, buf)?;
-                exec(vm, buf)
-            }
-            DataInstruction::BytesRaw(size) => {
-                bytes_raw(vm, buf, *size)?;
-                exec(vm, buf)
-            }
-            DataInstruction::String => {
-                string(vm, buf)?;
-                exec(vm, buf)
-            }
-        },
-        Instruction::Optional => {
-            optional(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::Extension => {
-            extension(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::Section(ctype, sid) => {
-            section(vm, buf, ctype, sid)?;
-            exec(vm, buf)
-        }
-        Instruction::PushCND => {
-            pushcnd(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::PopCursor => {
-            popcursor!(vm)?;
-            exec(vm, buf)
-        }
-        Instruction::Jmp(ptr) => {
-            jmp!(vm, ptr)?;
-            exec(vm, buf)
-        }
-        Instruction::JmpRet(ptr) => {
-            jmpret!(vm, ptr);
-            exec(vm, buf)
-        }
-        Instruction::JmpArrayCND => {
-            jmpacnd!(vm)?;
-            exec(vm, buf)
-        }
-        Instruction::JmpVariant(v, p) => {
-            jmpvariant!(vm, v, U48(p as u64))?;
-            exec(vm, buf)
-        }
-        Instruction::JmpTrap => {
-            jmptrap!(vm);
-            exec(vm, buf)
-        }
-        Instruction::Field(name) => {
-            field!(vm, name);
-            exec(vm, buf)
-        }
-        Instruction::Exit => {
-            if exit!(vm)? {
-                Ok(())
-            } else {
-                exec(vm, buf)
+pub fn exec(vm: &mut PackVM, buf: &[u8]) -> OpResult {
+    'dispatch: loop {
+        debug_assert!(vm.ip.0 < vm.executable.code.len() as u64);
+        debug_log!("{:?}", vm);
+        let inst = unsafe { *vm.executable.code.get_unchecked(vm.ip.0 as usize) };
+
+        match inst {
+            Instruction::IO(op) => match op {
+                DataInstruction::Bool => boolean(vm, buf)?,
+                DataInstruction::UInt(16) => long(vm, buf, false)?,
+                DataInstruction::UInt(size) => integer(vm, buf, size, false)?,
+                DataInstruction::Int(16) => long(vm, buf, true)?,
+                DataInstruction::Int(size) => integer(vm, buf, size, true)?,
+                DataInstruction::Float(size) => float(vm, buf, size)?,
+                DataInstruction::Leb128(signed) => leb128(vm, buf, signed)?,
+                DataInstruction::Bytes => bytes(vm, buf)?,
+                DataInstruction::BytesRaw(size) => bytes_raw(vm, buf, size)?,
+                DataInstruction::String => string(vm, buf)?,
+            },
+            Instruction::Optional => optional(vm, buf)?,
+            Instruction::Extension => extension(vm, buf)?,
+            Instruction::Section(ty, id) => section(vm, buf, ty, id)?,
+            Instruction::PushCND => pushcnd(vm, buf)?,
+            Instruction::PopCursor => popcursor!(vm)?,
+            Instruction::Jmp(dst) => jmp!(vm, dst)?,
+            Instruction::JmpRet(dst) => jmpret!(vm, dst),
+            Instruction::JmpArrayCND => jmpacnd!(vm)?,
+            Instruction::JmpTrap => jmptrap!(vm),
+            Instruction::Field(name) => field!(vm, name),
+            Instruction::Exit => {
+                if exit!(vm)? {
+                    break 'dispatch;
+                }
             }
         }
     }
+    Ok(())
 }

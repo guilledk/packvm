@@ -20,21 +20,9 @@ macro_rules! jmp {
 }
 
 #[macro_export]
-macro_rules! jmpvariant {
-    ($vm:ident, $variant:expr, $ptr:expr) => {{
-        if $vm.et == $variant {
-            $vm.ip += $ptr;
-        } else {
-            $vm.ip += 1;
-        }
-        Ok(())
-    }};
-}
-
-#[macro_export]
 macro_rules! jmptrap {
     ($vm:ident) => {{
-        $vm.retstack.push($vm.ip);
+        $vm.push_ret();
         $vm.ip = $vm.pid();
     }};
 }
@@ -55,10 +43,10 @@ macro_rules! jmpacnd {
 
 #[macro_export]
 macro_rules! jmpret {
-    ($vm:ident, $ptr:expr) => {
-        $vm.retstack.push($vm.ip);
+    ($vm:ident, $ptr:expr) => {{
+        $vm.push_ret();
         $vm.ip = $ptr;
-    };
+    }};
 }
 
 #[macro_export]
@@ -72,9 +60,10 @@ macro_rules! field {
 #[macro_export]
 macro_rules! exit {
     ($vm:ident) => {{
-        let exit = $vm.retstack.len() == 1;
+        let exit = $vm.retp == 1;
         if !exit {
-            $vm.ip = $vm.retstack.pop().unwrap() + 1;
+            $vm.ip = $vm.retstack[$vm.retp] + 1;
+            $vm.retp -= 1;
         }
         Ok(exit)
     }};

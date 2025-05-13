@@ -1,8 +1,8 @@
 use crate::compiler::{compile_array, compile_extension, compile_optional, insert_reserved_strings, EnumDef, ProgramNamespace, SourceCode, StructDef, TypeAlias, TypeDef, RESERVED_IDS, TRAP_COUNT};
-use crate::{compiler_error};
+use crate::compiler_error;
 use crate::isa::{DataInstruction, Instruction};
 use crate::utils::numbers::U48;
-use crate::utils::TypeCompileError;
+use crate::utils::{bytes_to_hex, TypeCompileError};
 use crate::{debug_log, get_str_or_unknown};
 use bimap::BiHashMap;
 use std::collections::HashMap;
@@ -26,19 +26,7 @@ pub struct Executable {
 
 impl Debug for Executable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Executable:",)?;
-        writeln!(f, "Code: [")?;
-        for (idx, op) in self.code.iter().enumerate() {
-            writeln!(f, "\t{idx:3}: {op:?}")?;
-        }
-        writeln!(f, "]")?;
-        writeln!(f, "Strings: [")?;
-        for i in 0..self.str_map.len() {
-            let not_str = format!("unknown {i}");
-            let str = self.str_map.get_by_left(&U48::from(i)).unwrap_or(&not_str);
-            writeln!(f, "\t{i:4}: {str:?}")?;
-        }
-        writeln!(f, "]")
+        write!(f, "{}", self.pretty_string())
     }
 }
 
@@ -57,7 +45,6 @@ impl Executable {
                 format!("{type_str} {sec_str}")
             }
             Instruction::JmpRet(ptr) => self.simple_jmp_str(*ptr),
-            Instruction::JmpVariant(_, ptr) => self.simple_jmp_str(U48(*ptr as u64)),
             _ => format!("{op:?}"),
         }
     }
@@ -79,25 +66,20 @@ impl Executable {
             Instruction::JmpRet(ptr) => {
                 format!("{:?} -> {}", op, self.simple_jmp_str(*ptr))
             }
-            Instruction::JmpVariant(_, ptr) => {
-                format!(
-                    "{:?} -> {}",
-                    op,
-                    self.simple_jmp_str(U48::from(*ptr as u64))
-                )
-            }
             _ => format!("{op:?}"),
         }
     }
 
     pub fn pretty_string(&self) -> String {
-        let mut s = String::new();
+        let mut s = format!("Executable({}):\n", bytes_to_hex(&self.ns_checksum));
+        s += "Code: [\n";
         for i in 0..self.code.len() {
             let op_str = self.pretty_op_string(U48::from(i));
             s += format!("\n\t{i}: {op_str}").as_str();
         }
+        s += "]\n";
 
-        s += "\nStrings [\n";
+        s += "Strings [\n";
         for i in 0..self.str_map.len() {
             let not_str = format!("unknown {i}");
             let str = self.str_map.get_by_left(&U48::from(i)).unwrap_or(&not_str);
@@ -280,32 +262,29 @@ pub fn assemble<
     exec.code.extend(ext_code);
 
     #[cfg(feature = "debug")]
-    {
-        // validate
-        for (jmp_i, op) in exec.code[TRAP_COUNT..src_ns.len()+TRAP_COUNT].iter().cloned().enumerate() {
-            match op {
-                Instruction::Jmp(ptr) => {
-                    let pid = U48::from(jmp_i + RESERVED_IDS );
+    for (jmp_i, op) in exec.code[TRAP_COUNT..src_ns.len()+TRAP_COUNT].iter().cloned().enumerate() {
+        match op {
+            Instruction::Jmp(ptr) => {
+                let pid = U48::from(jmp_i + RESERVED_IDS );
+                // validate section looks similar to source program code
+                let src_program = src_ns
+                    .get_program(&pid)
+                    .ok_or(compiler_error!("Couldn't find source program: {}", pid))?;
 
-                    let src_program = src_ns
-                        .get_program(&pid)
-                        .ok_or(compiler_error!("Couldn't find source program: {}", pid))?;
-
-                    let mut i = usize::from(ptr);
-                    while !exec.code[i].cmp_type(&Instruction::Exit) {
-                        let rel_i = i - usize::from(ptr);
-                        let asm_op = &exec.code[i];
-                        let src_op = &src_program.code[rel_i];
-                        if !src_op.cmp_type(asm_op) {
-                            debug_log!("{} different at {}: {:?} -> {:?}", pid, i, src_op, asm_op);
-                            debug_log!("Source:\n{:#?}", src_program);
-                            return Err(compiler_error!("Validation falied!"));
-                        }
-                        i += 1;
+                let mut i = usize::from(ptr);
+                while exec.code[i] != Instruction::Exit {
+                    let rel_i = i - usize::from(ptr);
+                    let asm_op = &exec.code[i];
+                    let src_op = &src_program.code[rel_i];
+                    if !src_op.cmp_type(asm_op) {
+                        debug_log!("{} different at {}: {:?} -> {:?}", pid, i, src_op, asm_op);
+                        debug_log!("Source:\n{:#?}", src_program);
+                        return Err(compiler_error!("Validation falied!"));
                     }
+                    i += 1;
                 }
-                _ => unreachable!(),
             }
+            _ => return Err(compiler_error!("Reached non Jmp instruction while evaluating jmp table")),
         }
     }
 

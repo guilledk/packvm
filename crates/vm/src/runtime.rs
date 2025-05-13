@@ -1,64 +1,101 @@
 use crate::compiler::assembly::Executable;
 use crate::compiler::{RunTarget, TypeModifier, RESERVED_IDS, TRAP_COUNT};
-use crate::debug_log;
 use crate::isa_impl::pack;
 use crate::utils::numbers::U48;
+use crate::debug_log;
 use crate::{isa::Value, isa_impl::unpack, utils::PackerError};
 use std::fmt::{Debug, Formatter};
+use std::mem::MaybeUninit;
+use std::ptr::NonNull;
 
 /// ValueCursor allows PackVM to keep track where in a nested Value is the next operation going to
 /// touch, be for fetching a value to pack or unpacking the next bytes
 /// # Safety
 /// The caller guarantees every pushed pointer lives as long as the cursor
-#[derive(Debug, Clone)]
-pub struct ValueCursor {
-    stack: Vec<std::ptr::NonNull<Value>>,
+pub struct ValueCursor<const MAX: usize> {
+    stack: [MaybeUninit<NonNull<Value>>; MAX],
+    len: usize,
 }
 
-impl ValueCursor {
+impl<const MAX: usize> ValueCursor<MAX> {
     #[inline(always)]
-    pub fn len(&self) -> usize {
-        self.stack.len()
+    pub const fn new() -> Self {
+        // `[MaybeUninit<_>; N]` is always valid uninitialised memory.
+        Self {
+            stack: unsafe {
+                MaybeUninit::<[MaybeUninit<NonNull<Value>>; MAX]>::uninit().assume_init()
+            },
+            len: 0,
+        }
     }
 
     #[inline(always)]
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    #[inline(always)]
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// # Safety
+    /// Caller guarantees `ptr` lives while it is on the cursor stack.
+    #[inline(always)]
     pub unsafe fn push(&mut self, ptr: *mut Value) {
-        self.stack.push(std::ptr::NonNull::new_unchecked(ptr));
+        debug_assert!(self.len < MAX, "ValueCursor overflow");
+        self.stack[self.len].write(NonNull::new_unchecked(ptr));
+        self.len += 1;
     }
 
     #[inline(always)]
     pub fn pop(&mut self) {
-        self.stack.pop();
+        debug_assert!(self.len > 0, "ValueCursor underflow");
+        self.len -= 1;
     }
 
     #[inline(always)]
     pub fn current(&self) -> &Value {
-        unsafe { self.stack.last().unwrap().as_ref() }
+        debug_assert!(self.len > 0, "ValueCursor is empty");
+        unsafe { self.stack[self.len - 1].assume_init_ref().as_ref() }
     }
 
     #[inline(always)]
     pub fn current_mut(&mut self) -> &mut Value {
-        unsafe { self.stack.last_mut().unwrap().as_mut() }
+        debug_assert!(self.len > 0, "ValueCursor is empty");
+        unsafe { self.stack[self.len - 1].assume_init_mut().as_mut() }
+    }
+}
+
+impl<const MAX: usize> Default for ValueCursor<MAX> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
 pub const PACKVM_RAM: usize = 1024 * 16; // 16kb
+pub const PACKVM_MAX_DEPTH: usize = 2048;
 
-#[derive(Clone)]
 pub struct PackVM {
     pub(crate) bp: usize, // buffer pointer: only needed for unpack
     pub(crate) ip: U48,   // instruction pointer
     pub(crate) fp: U48,   // field pointer: next field id
-    pub(crate) et: u32,   // enum type: next enum variant index
     pub(crate) ef: bool,  // emum flag: on unpack, used to not repeat enum -> struct double push
 
     pub(crate) rp: usize, // ram pointer
     pub(crate) ram: [u8; PACKVM_RAM],
 
-    pub(crate) retstack: Vec<U48>, // return stack: used by JmpRet & Exit instruction
+    pub(crate) retp: usize,                       // return stack pointer
+    pub(crate) retstack: [U48; PACKVM_MAX_DEPTH], // return stack: used by JmpRet & Exit instruction
 
-    pub(crate) cursor: ValueCursor,
+    pub(crate) cursor: ValueCursor<PACKVM_MAX_DEPTH>,
     pub(crate) executable: Executable,
+}
+
+impl Clone for PackVM {
+    fn clone(&self) -> Self {
+        Self::from_executable(self.executable.clone())
+    }
 }
 
 impl PackVM {
@@ -71,15 +108,15 @@ impl PackVM {
             bp: 0,
             ip: U48(0),
             fp: U48(0),
-            et: 0,
             ef: false,
 
             rp: 8,
             ram: [0; PACKVM_RAM],
 
-            retstack: vec![U48(0)],
+            retp: 1,
+            retstack: [U48(0); PACKVM_MAX_DEPTH],
 
-            cursor: ValueCursor { stack: Vec::new() },
+            cursor: ValueCursor::new(),
             executable,
         }
     }
@@ -94,10 +131,9 @@ impl PackVM {
         self.ef = false;
 
         self.rp = 8;
-        self.ram = [0; PACKVM_RAM];
-        self.retstack = vec![U48(0)];
+        self.retp = 1;
 
-        self.cursor.stack.clear();
+        self.cursor.clear();
     }
 
     fn set_target(&mut self, target: &RunTarget) {
@@ -152,16 +188,14 @@ impl PackVM {
 
         Ok(val)
     }
-
     #[inline(always)]
     pub fn pid(&self) -> U48 {
-        u64::from_le_bytes(
-            self.ram[..8]
-                .try_into()
-                .expect("Could not get pid from ram"),
+    u64::from_le_bytes(
+        self.ram[..8]
+            .try_into()
+            .expect("Could not get pid from ram"),
         ).into()
     }
-
     #[inline(always)]
     pub fn set_pid(&mut self, pid: U48) {
         let pid = pid.0.to_le_bytes();
@@ -210,16 +244,22 @@ impl PackVM {
     pub fn pop_cnd(&mut self) {
         self.rp -= 4;
     }
+    #[inline(always)]
+    pub fn push_ret(&mut self) {
+        self.retp += 1;
+        self.retstack[self.retp] = self.ip;
+    }
 }
 
 impl Debug for PackVM {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.write_fmt(format_args!(
-            "ip({:4}) bp({:5}) cnd({:4}) rp({:2}) iop({:2})  | {}",
+            "ip({:4}) bp({:5}) cnd({:4}) rp({:2}) retp({:2}) iop({:2})  | {}",
             self.ip,
             self.bp,
             self.cnd(),
             self.rp,
+            self.retp,
             self.cursor.len(),
             self.executable.pretty_op_string(self.ip)
         ))

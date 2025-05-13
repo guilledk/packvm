@@ -1,10 +1,14 @@
 #![allow(clippy::match_same_arms)]
 
-use tailcall::tailcall;
-
 use crate::isa::DataInstruction;
 use crate::utils::numbers::U48;
-use crate::{debug_log, exit, field, isa_impl::common::OpResult, jmp, jmpacnd, jmpret, jmptrap, jmpvariant, packer_error, popcursor, utils::varint::{VarInt32, VarUInt32}, Instruction, PackVM, Value};
+use crate::{
+    debug_log, exit, field,
+    isa_impl::common::OpResult,
+    jmp, jmpacnd, jmpret, jmptrap, packer_error, popcursor,
+    utils::varint::{VarInt32, VarUInt32},
+    Instruction, PackVM, Value,
+};
 
 macro_rules! vmgetio {
     ($vm:ident) => {{
@@ -318,7 +322,9 @@ fn pushcnd(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
 fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8, sid: U48) -> OpResult {
     vm.ip += 1;
 
-    if ctype == 0 { return Ok(()); }
+    if ctype == 0 {
+        return Ok(());
+    }
 
     let child_ptr: *mut Value;
 
@@ -333,20 +339,26 @@ fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8, sid: U48) -> OpResult 
                     })?;
 
                     let variant_id = match type_field {
-                        Value::String(var_name) => {
-                            vm.executable.var_map.get(&sid)
-                                .ok_or(packer_error!("Could not find sid: {sid} in var map!"))?
-                                .iter().position(|v| v == var_name)
-                                .ok_or(packer_error!("Could not find variant name {var_name} in vars!"))? as u32
-                        }
-                        Value::Int(n) => n.as_u64().unwrap() as u32,
+                        Value::String(var_name) => vm
+                            .executable
+                            .var_map
+                            .get(&sid)
+                            .ok_or(packer_error!("Could not find sid: {sid} in var map!"))?
+                            .iter()
+                            .position(|v| v == var_name)
+                            .ok_or(packer_error!(
+                                "Could not find variant name {var_name} in vars!"
+                            ))?,
+                        Value::Int(n) => n.as_u64().unwrap() as usize,
                         _ => return Err(packer_error!("`type` field is not Int")),
                     };
 
-                    let (raw, len) = VarUInt32(variant_id).encode();
+                    let (raw, len) = VarUInt32(variant_id as u32).encode();
                     buf.extend_from_slice(&raw[..len]);
 
-                    vm.et = variant_id;
+                    if variant_id > 0 {
+                        vm.ip += U48::from(2 * variant_id);
+                    }
                 }
             }
             _ => return Err(packer_error!("section: expected Struct, got {:?}", slot)),
@@ -360,103 +372,41 @@ fn section(vm: &mut PackVM, buf: &mut Vec<u8>, ctype: u8, sid: U48) -> OpResult 
 
     Ok(())
 }
-#[tailcall]
 pub fn exec(vm: &mut PackVM, buf: &mut Vec<u8>) -> OpResult {
-    debug_log!("{:?}", vm);
-    match vm.executable.code[vm.ip.0 as usize] {
-        Instruction::IO(ref op) => match op {
-            DataInstruction::Bool => {
-                boolean(vm, buf)?;
-                exec(vm, buf)
-            }
-            DataInstruction::UInt(size) => {
-                if *size == 16 {
-                    long(vm, buf, false)?
-                } else {
-                    integer(vm, buf, *size, false)?
-                };
-                exec(vm, buf)
-            }
-            DataInstruction::Int(size) => {
-                if *size == 16 {
-                    long(vm, buf, true)?
-                } else {
-                    integer(vm, buf, *size, true)?
-                };
-                exec(vm, buf)
-            }
-            DataInstruction::Float(size) => {
-                float(vm, buf, *size)?;
-                exec(vm, buf)
-            }
-            DataInstruction::Leb128(signed) => {
-                leb128(vm, buf, *signed)?;
-                exec(vm, buf)
-            }
-            DataInstruction::Bytes => {
-                bytes(vm, buf)?;
-                exec(vm, buf)
-            }
-            DataInstruction::BytesRaw(size) => {
-                bytes_raw(vm, buf, *size)?;
-                exec(vm, buf)
-            }
-            DataInstruction::String => {
-                string(vm, buf)?;
-                exec(vm, buf)
-            }
-        },
-        Instruction::Optional => {
-            optional(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::Extension => {
-            extension(vm)?;
-            exec(vm, buf)
-        }
-        Instruction::Section(ctype, sid) => {
-            section(vm, buf, ctype, sid)?;
-            exec(vm, buf)
-        }
+    'dispatch: loop {
+        debug_assert!(vm.ip.0 < vm.executable.code.len() as u64);
+        debug_log!("{:?}", vm);
+        let inst = unsafe { *vm.executable.code.get_unchecked(vm.ip.0 as usize) };
 
-        Instruction::PushCND => {
-            pushcnd(vm, buf)?;
-            exec(vm, buf)
-        }
-        Instruction::PopCursor => {
-            popcursor!(vm)?;
-            exec(vm, buf)
-        }
-        Instruction::Jmp(ptr) => {
-            jmp!(vm, ptr)?;
-            exec(vm, buf)
-        }
-        Instruction::JmpRet(ptr) => {
-            jmpret!(vm, ptr);
-            exec(vm, buf)
-        }
-        Instruction::JmpArrayCND => {
-            jmpacnd!(vm)?;
-            exec(vm, buf)
-        }
-        Instruction::JmpVariant(v, p) => {
-            jmpvariant!(vm, v, U48(p as u64))?;
-            exec(vm, buf)
-        }
-        Instruction::JmpTrap => {
-            jmptrap!(vm);
-            exec(vm, buf)
-        }
-        Instruction::Field(name) => {
-            field!(vm, name);
-            exec(vm, buf)
-        }
-        Instruction::Exit => {
-            if exit!(vm)? {
-                Ok(())
-            } else {
-                exec(vm, buf)
+        match inst {
+            Instruction::IO(op) => match op {
+                DataInstruction::Bool => boolean(vm, buf)?,
+                DataInstruction::UInt(16) => long(vm, buf, false)?,
+                DataInstruction::UInt(size) => integer(vm, buf, size, false)?,
+                DataInstruction::Int(16) => long(vm, buf, true)?,
+                DataInstruction::Int(size) => integer(vm, buf, size, true)?,
+                DataInstruction::Float(size) => float(vm, buf, size)?,
+                DataInstruction::Leb128(signed) => leb128(vm, buf, signed)?,
+                DataInstruction::Bytes => bytes(vm, buf)?,
+                DataInstruction::BytesRaw(size) => bytes_raw(vm, buf, size)?,
+                DataInstruction::String => string(vm, buf)?,
+            },
+            Instruction::Optional => optional(vm, buf)?,
+            Instruction::Extension => extension(vm)?,
+            Instruction::Section(ty, id) => section(vm, buf, ty, id)?,
+            Instruction::PushCND => pushcnd(vm, buf)?,
+            Instruction::PopCursor => popcursor!(vm)?,
+            Instruction::Jmp(dst) => jmp!(vm, dst)?,
+            Instruction::JmpRet(dst) => jmpret!(vm, dst),
+            Instruction::JmpArrayCND => jmpacnd!(vm)?,
+            Instruction::JmpTrap => jmptrap!(vm),
+            Instruction::Field(name) => field!(vm, name),
+            Instruction::Exit => {
+                if exit!(vm)? {
+                    break 'dispatch;
+                }
             }
         }
     }
+    Ok(())
 }
