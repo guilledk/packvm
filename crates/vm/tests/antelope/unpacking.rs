@@ -19,8 +19,9 @@ use packvm::{
 use packvm_macros::{VMEnum, VMStruct};
 use serde::Serialize;
 use serde_json::from_str;
+use packvm::utils::bytes_to_hex;
 
-const TESTABI: &str = include_str!("test_abi.json");
+const TESTABI: &str = include_str!("../../../../resources/antelope/test_abi.json");
 
 /// Run `PackVM` for the ABI type, feed it the buffer,
 /// and assert that the resulting stack equals `$expected`.
@@ -256,6 +257,8 @@ fn test_unpack_struct() {
     };
     test.pack(&mut enc);
 
+    println!("{}", bytes_to_hex(&enc.get_bytes()));
+
     let expected: Value = test.into();
 
     let abi: ABI = from_str(TESTABI).expect("failed to parse ABI JSON");
@@ -279,7 +282,7 @@ fn test_unpack_struct() {
     assert_eq!(decoded, expected);
 }
 
-const STDABI: &str = include_str!("std_abi.json");
+const STDABI: &str = include_str!("../../../../resources/antelope/std_abi.json");
 
 #[test]
 fn test_unpack_result() {
@@ -332,7 +335,7 @@ fn test_unpack_signature() {
     assert_eq!(sig, dec_sig);
 }
 
-const SIGBLOCKABI: &str = include_str!("signed_block_abi.json");
+const SIGBLOCKABI: &str = include_str!("../../../../resources/antelope/signed_block_abi.json");
 
 #[test]
 fn test_unpack_signed_block() {

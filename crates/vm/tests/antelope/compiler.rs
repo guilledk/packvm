@@ -4,9 +4,9 @@ use packvm::{assemble, compile_source, debug_log};
 use serde_json::from_str;
 use packvm::Executable;
 
-const STD_ABI: &str = include_str!("std_abi.json");
+const STD_ABI: &str = include_str!("../../../../resources/antelope/std_abi.json");
 
-const TEST_ABI: &str = include_str!("test_abi.json");
+const TEST_ABI: &str = include_str!("../../../../resources/antelope/test_abi.json");
 
 #[test]
 fn test_abi() {

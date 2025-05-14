@@ -289,6 +289,10 @@ impl<
         }
     }
 
+    pub fn source(&self) -> &Source {
+        &self.src
+    }
+
     pub fn get_program_by_name(&self, name: &str) -> Option<&Program> {
         if let Some(trgt) = self.src.program_id_for(name) {
             return self.ns.get(&trgt.pid);

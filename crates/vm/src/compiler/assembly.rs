@@ -31,6 +31,11 @@ impl Debug for Executable {
 }
 
 impl Executable {
+    pub fn get_string(&self, id: &U48) -> &String {
+        self.str_map.get_by_left(id)
+            .expect(&format!("Could not find string for id: {id}"))
+    }
+
     fn simple_jmp_str(&self, ptr: U48) -> String {
         let op = &self.code[usize::from(ptr)];
         match op {

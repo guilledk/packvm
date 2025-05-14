@@ -9,7 +9,7 @@ pub use compiler::{
 };
 pub mod isa;
 pub mod utils;
-pub use isa::{Instruction, Value};
+pub use isa::{DataInstruction, Instruction, Value};
 
 mod isa_impl;
 pub mod runtime;

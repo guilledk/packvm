@@ -18,7 +18,7 @@ use packvm_macros::{VMEnum, VMStruct};
 use serde::Serialize;
 use serde_json::from_str;
 
-const TESTABI: &str = include_str!("test_abi.json");
+const TESTABI: &str = include_str!("../../../../resources/antelope/test_abi.json");
 
 /// Run `PackVM` for the ABI type, feed it the buffer,
 /// and assert that the resulting stack equals `$expected`.
@@ -272,7 +272,7 @@ fn test_pack_struct() {
     assert_eq!(encoded, enc.get_bytes());
 }
 
-const STDABI: &str = include_str!("std_abi.json");
+const STDABI: &str = include_str!("../../../../resources/antelope/std_abi.json");
 
 #[test]
 fn test_pack_get_status_request_v0() {
@@ -319,7 +319,7 @@ fn test_pack_get_status_request_v0() {
     assert_eq!(encoded.as_slice(), encoder.get_bytes());
 }
 
-const EOSIOABI: &str = include_str!("eosio.system.json");
+const EOSIOABI: &str = include_str!("../../../../resources/antelope/eosio.system.json");
 
 #[test]
 fn test_pack_newaccount() {

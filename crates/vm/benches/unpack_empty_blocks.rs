@@ -25,7 +25,7 @@ fn make_input(n: usize) -> Vec<u8> {
 }
 
 fn bench_unpack(c: &mut Criterion) {
-    let abi: ShipABI = from_str(include_str!("../tests/antelope/std_abi.json")).expect("failed to parse ABI JSON");
+    let abi: ShipABI = from_str(include_str!("../../../resources/antelope/std_abi.json")).expect("failed to parse ABI JSON");
     let src = AntelopeSourceCode::try_from(abi).expect("failed to convert to SourceCode");
     let ns = compile_source!(src);
     let code = assemble!(&ns);

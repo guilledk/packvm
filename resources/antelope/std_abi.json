@@ -263,7 +263,7 @@
       ]
     },
     {
-      "name": "get_blocks_result_v0",
+      "name": "get_blocks_result_v0_header",
       "fields": [
         {
           "name": "head",
@@ -280,7 +280,13 @@
         {
           "name": "prev_block",
           "type": "block_position?"
-        },
+        }
+      ]
+    },
+    {
+      "name": "get_blocks_result_v0",
+      "base": "get_blocks_result_v0_header",
+      "fields": [
         {
           "name": "block",
           "type": "bytes?"

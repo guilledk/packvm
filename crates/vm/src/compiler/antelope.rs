@@ -192,6 +192,9 @@ fn include_antelope_stdtypes(aliases: &mut Vec<AbiTypeDef>, structs: &mut Vec<Ab
     .iter()
     .rev()
     {
+        if aliases.iter().find(|a| a.new_type_name() == *new_type).is_some() {
+            continue;
+        }
         aliases.insert(
             0,
             AbiTypeDef {
